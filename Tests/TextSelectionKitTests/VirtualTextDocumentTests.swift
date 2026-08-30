@@ -263,4 +263,79 @@ struct VirtualTextDocumentTests {
         let attr = doc.attributedString(in: 0..<10)
         #expect(String(attr.characters) == "HelloWorld")
     }
+    
+    @Test("text(in:) and attributedString(in:) agree on partial delimiter selections")
+    func testPartialDelimiterSynchronization() {
+        // "Apple" (0..<5), ", " (5..<7), "Banana" (7..<13)
+        let e1 = makeRegistration(text: "Apple", frame: CGRect(x: 0, y: 0, width: 50, height: 20), delimiter: ", ")
+        let e2 = makeRegistration(text: "Banana", frame: CGRect(x: 60, y: 0, width: 50, height: 20), delimiter: ", ")
+        let doc = VirtualTextDocument(elements: [e1, e2])
+        
+        // 4..<8: "e, B"
+        #expect(doc.text(in: 4..<8) == "e, B")
+        #expect(String(doc.attributedString(in: 4..<8).characters) == "e, B")
+        
+        // 5..<8: ", B" (starts at delimiter start)
+        #expect(doc.text(in: 5..<8) == ", B")
+        #expect(String(doc.attributedString(in: 5..<8).characters) == ", B")
+        
+        // 6..<8: " B" (starts inside delimiter)
+        #expect(doc.text(in: 6..<8) == " B")
+        #expect(String(doc.attributedString(in: 6..<8).characters) == " B")
+        
+        // 5..<7: ", " (delimiter only)
+        #expect(doc.text(in: 5..<7) == ", ")
+        #expect(String(doc.attributedString(in: 5..<7).characters) == ", ")
+        
+        // 4..<6: "e," (element end + partial delimiter)
+        #expect(doc.text(in: 4..<6) == "e,")
+        #expect(String(doc.attributedString(in: 4..<6).characters) == "e,")
+        
+        // 4..<7: "e, " (element end + full delimiter)
+        #expect(doc.text(in: 4..<7) == "e, ")
+        #expect(String(doc.attributedString(in: 4..<7).characters) == "e, ")
+    }
+    
+    @Test("Exhaustive text(in:) and attributedString(in:) round-trip property across multi-element documents")
+    func testExhaustiveTextAndAttributedStringRoundTrip() {
+        let e1 = makeRegistration(text: "Swift", frame: CGRect(x: 0, y: 0, width: 50, height: 20), delimiter: " -- ")
+        let e2 = makeRegistration(text: "UI", frame: CGRect(x: 60, y: 0, width: 50, height: 20), delimiter: "\n\n")
+        let e3 = makeRegistration(text: "Kit", frame: CGRect(x: 120, y: 0, width: 50, height: 20), delimiter: "")
+        let doc = VirtualTextDocument(elements: [e1, e2, e3])
+        
+        for lower in 0...doc.totalLength {
+            for upper in lower...doc.totalLength {
+                let range = lower..<upper
+                let plain = doc.text(in: range)
+                let attr = doc.attributedString(in: range)
+                #expect(String(attr.characters) == plain, "Mismatch at range \(range): plain=\(plain), attr=\(String(attr.characters))")
+            }
+        }
+    }
+    
+    @Test("Early return hits when tree order differs from visual spatial order")
+    func testEarlyReturnWhenTreeOrderDiffersFromVisualOrder() {
+        let e1 = makeRegistration(text: "Top", frame: CGRect(x: 0, y: 0, width: 100, height: 20))
+        let e2 = makeRegistration(text: "Middle", frame: CGRect(x: 0, y: 50, width: 100, height: 20))
+        let e3 = makeRegistration(text: "Bottom", frame: CGRect(x: 0, y: 100, width: 100, height: 20))
+        
+        // Tree order is reversed from visual Y order: [Bottom, Middle, Top]
+        let treeOrder = [e3, e2, e1]
+        var doc = VirtualTextDocument(elements: treeOrder)
+        
+        // Visual sorted elements should be [Top, Middle, Bottom]
+        #expect(doc.elements.map(\.id) == [e1.id, e2.id, e3.id])
+        #expect(doc.slices.map(\.element.id) == [e1.id, e2.id, e3.id])
+        #expect(doc.fullText == "Top\nMiddle\nBottom")
+        
+        // Stored rawElements should match tree order
+        #expect(doc.rawElements == treeOrder)
+        
+        // Calling update again with identical tree order should hit early-return
+        doc.update(elements: treeOrder)
+        #expect(doc.elements.map(\.id) == [e1.id, e2.id, e3.id])
+        #expect(doc.slices.map(\.element.id) == [e1.id, e2.id, e3.id])
+        #expect(doc.fullText == "Top\nMiddle\nBottom")
+    }
 }
+

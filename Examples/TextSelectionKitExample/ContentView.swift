@@ -224,7 +224,7 @@ public struct FeatureShowcaseView: View {
                         SelectableText("✨🚀 →")
 
                         let sampleKey: LocalizedStringKey = "Localized string key with **markdown** formatting"
-                        SelectableText(sampleKey)
+                        SelectableText(localizedKey: sampleKey)
 
                         SelectableText(verbatim: "Verbatim raw text: no *markdown* parsing here")
 

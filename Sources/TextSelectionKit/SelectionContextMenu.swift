@@ -16,7 +16,7 @@ public struct SelectionMenuContext: @unchecked Sendable {
     /// The formatted rich text content currently selected.
     public let selectedAttributedString: AttributedString
     
-    /// The continuous character range of the active selection in the virtual document.
+    /// The continuous range in UTF-16 code-unit offsets of the active selection in the virtual document.
     public let globalSelectedRange: Range<Int>
     
     /// The identifiers of all elements containing active selection, in document layout order.
@@ -117,26 +117,11 @@ public struct SelectionButton: SelectionMenuItemConvertible, @unchecked Sendable
     public let displayedShortcut: SelectionKeyboardShortcut?
     public let action: @MainActor () -> Void
     
-    /// Creates a selection button from a localized string key (including string literals).
-    public init(
-        _ titleKey: LocalizedStringKey,
-        systemImage: String? = nil,
-        role: ButtonRole? = nil,
-        isEnabled: Bool = true,
-        displayedShortcut: SelectionKeyboardShortcut? = nil,
-        action: @escaping @MainActor () -> Void
-    ) {
-        self.title = MenuLocalizationHelper.resolve(titleKey)
-        self.systemImage = systemImage
-        self.role = role
-        self.isEnabled = isEnabled
-        self.displayedShortcut = displayedShortcut
-        self.action = action
-    }
-    
     /// Creates a selection button from a localized string resource.
+    ///
+    /// String literals and interpolations passed to `SelectionButton("...")` use this initializer.
     public init(
-        resource: LocalizedStringResource,
+        _ resource: LocalizedStringResource,
         systemImage: String? = nil,
         role: ButtonRole? = nil,
         isEnabled: Bool = true,
@@ -164,6 +149,23 @@ public struct SelectionButton: SelectionMenuItemConvertible, @unchecked Sendable
         action: @escaping @MainActor () -> Void
     ) {
         self.title = MenuLocalizationHelper.resolve(localized: key, table: table, bundle: bundle, locale: locale)
+        self.systemImage = systemImage
+        self.role = role
+        self.isEnabled = isEnabled
+        self.displayedShortcut = displayedShortcut
+        self.action = action
+    }
+    
+    /// Creates a selection button from a localized string key.
+    public init(
+        localizedKey titleKey: LocalizedStringKey,
+        systemImage: String? = nil,
+        role: ButtonRole? = nil,
+        isEnabled: Bool = true,
+        displayedShortcut: SelectionKeyboardShortcut? = nil,
+        action: @escaping @MainActor () -> Void
+    ) {
+        self.title = MenuLocalizationHelper.resolve(titleKey)
         self.systemImage = systemImage
         self.role = role
         self.isEnabled = isEnabled
@@ -243,20 +245,11 @@ public struct SelectionMenu: SelectionMenuItemConvertible, @unchecked Sendable {
     public let systemImage: String?
     public let items: [any SelectionMenuItemConvertible]
     
-    /// Creates a submenu with a localized string key (including string literals).
-    public init(
-        _ titleKey: LocalizedStringKey,
-        systemImage: String? = nil,
-        @SelectionMenuBuilder content: () -> [any SelectionMenuItemConvertible]
-    ) {
-        self.title = MenuLocalizationHelper.resolve(titleKey)
-        self.systemImage = systemImage
-        self.items = content()
-    }
-    
     /// Creates a submenu with a localized string resource.
+    ///
+    /// String literals and interpolations passed to `SelectionMenu("...")` use this initializer.
     public init(
-        resource: LocalizedStringResource,
+        _ resource: LocalizedStringResource,
         systemImage: String? = nil,
         @SelectionMenuBuilder content: () -> [any SelectionMenuItemConvertible]
     ) {
@@ -275,6 +268,17 @@ public struct SelectionMenu: SelectionMenuItemConvertible, @unchecked Sendable {
         @SelectionMenuBuilder content: () -> [any SelectionMenuItemConvertible]
     ) {
         self.title = MenuLocalizationHelper.resolve(localized: key, table: table, bundle: bundle, locale: locale)
+        self.systemImage = systemImage
+        self.items = content()
+    }
+    
+    /// Creates a submenu with a localized string key.
+    public init(
+        localizedKey titleKey: LocalizedStringKey,
+        systemImage: String? = nil,
+        @SelectionMenuBuilder content: () -> [any SelectionMenuItemConvertible]
+    ) {
+        self.title = MenuLocalizationHelper.resolve(titleKey)
         self.systemImage = systemImage
         self.items = content()
     }
@@ -316,7 +320,7 @@ public struct SelectionMenuItem: SelectionMenuItemConvertible, @unchecked Sendab
     }
     
     public static func button(
-        _ titleKey: LocalizedStringKey,
+        _ resource: LocalizedStringResource,
         systemImage: String? = nil,
         role: ButtonRole? = nil,
         isEnabled: Bool = true,
@@ -324,7 +328,7 @@ public struct SelectionMenuItem: SelectionMenuItemConvertible, @unchecked Sendab
         action: @escaping @MainActor () -> Void
     ) -> SelectionMenuItem {
         SelectionMenuItem(SelectionButton(
-            titleKey,
+            resource,
             systemImage: systemImage,
             role: role,
             isEnabled: isEnabled,
@@ -334,7 +338,10 @@ public struct SelectionMenuItem: SelectionMenuItemConvertible, @unchecked Sendab
     }
     
     public static func button(
-        resource: LocalizedStringResource,
+        localized key: String.LocalizationValue,
+        table: String? = nil,
+        bundle: Bundle? = nil,
+        locale: Locale = .current,
         systemImage: String? = nil,
         role: ButtonRole? = nil,
         isEnabled: Bool = true,
@@ -342,7 +349,28 @@ public struct SelectionMenuItem: SelectionMenuItemConvertible, @unchecked Sendab
         action: @escaping @MainActor () -> Void
     ) -> SelectionMenuItem {
         SelectionMenuItem(SelectionButton(
-            resource: resource,
+            localized: key,
+            table: table,
+            bundle: bundle,
+            locale: locale,
+            systemImage: systemImage,
+            role: role,
+            isEnabled: isEnabled,
+            displayedShortcut: displayedShortcut,
+            action: action
+        ))
+    }
+    
+    public static func button(
+        localizedKey titleKey: LocalizedStringKey,
+        systemImage: String? = nil,
+        role: ButtonRole? = nil,
+        isEnabled: Bool = true,
+        displayedShortcut: SelectionKeyboardShortcut? = nil,
+        action: @escaping @MainActor () -> Void
+    ) -> SelectionMenuItem {
+        SelectionMenuItem(SelectionButton(
+            localizedKey: titleKey,
             systemImage: systemImage,
             role: role,
             isEnabled: isEnabled,
@@ -374,19 +402,30 @@ public struct SelectionMenuItem: SelectionMenuItemConvertible, @unchecked Sendab
     }
     
     public static func menu(
-        _ titleKey: LocalizedStringKey,
+        _ resource: LocalizedStringResource,
         systemImage: String? = nil,
         @SelectionMenuBuilder content: () -> [any SelectionMenuItemConvertible]
     ) -> SelectionMenuItem {
-        SelectionMenuItem(SelectionMenu(titleKey, systemImage: systemImage, content: content))
+        SelectionMenuItem(SelectionMenu(resource, systemImage: systemImage, content: content))
     }
     
     public static func menu(
-        resource: LocalizedStringResource,
+        localized key: String.LocalizationValue,
+        table: String? = nil,
+        bundle: Bundle? = nil,
+        locale: Locale = .current,
         systemImage: String? = nil,
         @SelectionMenuBuilder content: () -> [any SelectionMenuItemConvertible]
     ) -> SelectionMenuItem {
-        SelectionMenuItem(SelectionMenu(resource: resource, systemImage: systemImage, content: content))
+        SelectionMenuItem(SelectionMenu(localized: key, table: table, bundle: bundle, locale: locale, systemImage: systemImage, content: content))
+    }
+    
+    public static func menu(
+        localizedKey titleKey: LocalizedStringKey,
+        systemImage: String? = nil,
+        @SelectionMenuBuilder content: () -> [any SelectionMenuItemConvertible]
+    ) -> SelectionMenuItem {
+        SelectionMenuItem(SelectionMenu(localizedKey: titleKey, systemImage: systemImage, content: content))
     }
     
     public static func menu(

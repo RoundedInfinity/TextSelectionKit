@@ -183,7 +183,7 @@ struct SelectionContextMenuTests {
     @MainActor
     func testLocalizationSupport() {
         let key: LocalizedStringKey = "menu_highlight_action"
-        let btnKey = SelectionButton(key, systemImage: "highlighter") {}
+        let btnKey = SelectionButton(localizedKey: key, systemImage: "highlighter") {}
         let parsedBtn = btnKey.makeParsedMenuItems()
         guard case .action(let title, let img, _, _, _, _) = parsedBtn.first else {
             Issue.record("Expected .action")
@@ -202,6 +202,31 @@ struct SelectionContextMenuTests {
             return
         }
         #expect(!menuTitle.isEmpty)
+        #expect(items.count == 1)
+    }
+    
+    @Test("SelectionButton and SelectionMenu support String.LocalizationValue with interpolation")
+    @MainActor
+    func testLocalizationInterpolationSupport() {
+        let count = 5
+        let btn = SelectionButton("Delete \(count) items", systemImage: "trash") {}
+        let parsedBtn = btn.makeParsedMenuItems()
+        guard case .action(let title, let img, _, _, _, _) = parsedBtn.first else {
+            Issue.record("Expected .action")
+            return
+        }
+        #expect(title == "Delete 5 items")
+        #expect(img == "trash")
+        
+        let menu = SelectionMenu("Share \(count) files") {
+            SelectionButton("Export") {}
+        }
+        let parsedMenu = menu.makeParsedMenuItems()
+        guard case .submenu(let menuTitle, _, let items) = parsedMenu.first else {
+            Issue.record("Expected .submenu")
+            return
+        }
+        #expect(menuTitle == "Share 5 files")
         #expect(items.count == 1)
     }
     

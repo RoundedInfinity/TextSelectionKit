@@ -323,7 +323,7 @@ enum PlatformFontResolver {
         traverse(font)
         
         #if os(macOS)
-        let baseFont: NSFont
+        var baseFont: NSFont
         if let name = name, let size = size {
             baseFont = NSFont(name: name, size: size) ?? NSFont.systemFont(ofSize: size)
         } else if let size = size {
@@ -334,33 +334,49 @@ enum PlatformFontResolver {
                 baseFont = NSFont.systemFont(ofSize: size, weight: weight)
             }
         } else if let textStyle = textStyle {
-            let styleSize: CGFloat
-            let defaultWeight: NSFont.Weight
+            let nsStyle: NSFont.TextStyle
             switch textStyle {
-            case "largeTitle": styleSize = 26; defaultWeight = .bold
-            case "title", "title1": styleSize = 22; defaultWeight = .bold
-            case "title2": styleSize = 18; defaultWeight = .bold
-            case "title3": styleSize = 15; defaultWeight = .semibold
-            case "headline": styleSize = 13; defaultWeight = .semibold
-            case "subheadline": styleSize = 11; defaultWeight = .regular
-            case "callout": styleSize = 12; defaultWeight = .regular
-            case "footnote": styleSize = 10; defaultWeight = .regular
-            case "caption", "caption1": styleSize = 10; defaultWeight = .regular
-            case "caption2": styleSize = 9; defaultWeight = .regular
-            default: styleSize = 13; defaultWeight = .regular
+            case "largeTitle": nsStyle = .largeTitle
+            case "title", "title1": nsStyle = .title1
+            case "title2": nsStyle = .title2
+            case "title3": nsStyle = .title3
+            case "headline": nsStyle = .headline
+            case "subheadline": nsStyle = .subheadline
+            case "body": nsStyle = .body
+            case "callout": nsStyle = .callout
+            case "footnote": nsStyle = .footnote
+            case "caption", "caption1": nsStyle = .caption1
+            case "caption2": nsStyle = .caption2
+            default: nsStyle = .body
             }
-            let weight = weightVal.map { NSFont.Weight(rawValue: $0) } ?? (isBold ? .bold : defaultWeight)
-            if isMonospaced {
-                baseFont = NSFont.monospacedSystemFont(ofSize: styleSize, weight: weight)
+            let unscaled = NSFont.preferredFont(forTextStyle: nsStyle)
+            if let weightVal {
+                let descriptor = unscaled.fontDescriptor.addingAttributes([
+                    .traits: [NSFontDescriptor.TraitKey.weight: weightVal]
+                ])
+                baseFont = NSFont(descriptor: descriptor, size: unscaled.pointSize) ?? unscaled
+            } else if isBold {
+                baseFont = unscaled.bold
             } else {
-                baseFont = NSFont.systemFont(ofSize: styleSize, weight: weight)
+                baseFont = unscaled
+            }
+            if isMonospaced {
+                baseFont = baseFont.monospaced
             }
         } else {
-            let weight = weightVal.map { NSFont.Weight(rawValue: $0) } ?? (isBold ? .bold : .regular)
-            if isMonospaced {
-                baseFont = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: weight)
+            let defaultFont = NSFont.preferredFont(forTextStyle: .body)
+            if let weightVal {
+                let descriptor = defaultFont.fontDescriptor.addingAttributes([
+                    .traits: [NSFontDescriptor.TraitKey.weight: weightVal]
+                ])
+                baseFont = NSFont(descriptor: descriptor, size: defaultFont.pointSize) ?? defaultFont
+            } else if isBold {
+                baseFont = defaultFont.bold
             } else {
-                baseFont = NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: weight)
+                baseFont = defaultFont
+            }
+            if isMonospaced {
+                baseFont = baseFont.monospaced
             }
         }
         

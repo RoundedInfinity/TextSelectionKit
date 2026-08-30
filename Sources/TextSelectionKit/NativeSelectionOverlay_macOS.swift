@@ -2,6 +2,108 @@
 import AppKit
 import SwiftUI
 
+// MARK: - macOS Selection Highlight Background View
+
+final class MacOSSelectionHighlightView: NSView {
+    weak var manager: SelectionManager? {
+        didSet {
+            setupManagerCallback()
+        }
+    }
+    
+    private var listenerToken: UUID?
+    
+    override var isFlipped: Bool { true }
+    
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        setupView()
+    }
+    
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupView()
+    }
+    
+    private func setupView() {
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+    }
+    
+    internal var onNeedsDisplay: (() -> Void)?
+    
+    private func setupManagerCallback() {
+        if let token = listenerToken, let oldManager = manager {
+            oldManager.removeInternalSelectionListener(token: token)
+        }
+        listenerToken = manager?.addInternalSelectionListener { [weak self] in
+            self?.needsDisplay = true
+            self?.onNeedsDisplay?()
+        }
+    }
+    
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didBecomeKeyNotification, object: nil)
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: nil)
+        
+        if let window = window {
+            NotificationCenter.default.addObserver(self, selector: #selector(windowKeyStatusChanged), name: NSWindow.didBecomeKeyNotification, object: window)
+            NotificationCenter.default.addObserver(self, selector: #selector(windowKeyStatusChanged), name: NSWindow.didResignKeyNotification, object: window)
+        }
+    }
+    
+    @objc private func windowKeyStatusChanged() {
+        needsDisplay = true
+    }
+    
+    func highlightColor(isKey: Bool) -> NSColor {
+        isKey ? NSColor.selectedTextBackgroundColor : NSColor.unemphasizedSelectedTextBackgroundColor
+    }
+    
+    public override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let manager = manager, manager.hasSelection else { return }
+        
+        let rects = manager.document.lineSelectionRects(for: manager.globalSelectedRange)
+        guard !rects.isEmpty else { return }
+        
+        NSGraphicsContext.saveGraphicsState()
+        let isKey = window?.isKeyWindow ?? true
+        let color = highlightColor(isKey: isKey)
+        color.setFill()
+        
+        for rect in rects {
+            if dirtyRect.intersects(rect) {
+                let path = NSBezierPath(rect: rect)
+                path.fill()
+            }
+        }
+        
+        NSGraphicsContext.restoreGraphicsState()
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+}
+
+// MARK: - macOS Selection Highlight Representable
+
+struct MacOSSelectionHighlightOverlay: NSViewRepresentable {
+    var manager: SelectionManager
+    
+    func makeNSView(context: Context) -> MacOSSelectionHighlightView {
+        let view = MacOSSelectionHighlightView()
+        view.manager = manager
+        return view
+    }
+    
+    func updateNSView(_ nsView: MacOSSelectionHighlightView, context: Context) {
+        nsView.manager = manager
+    }
+}
+
 // MARK: - macOS Selection Tracking View
 
 final class MacOSSelectionTrackingView: NSView {
@@ -16,16 +118,19 @@ final class MacOSSelectionTrackingView: NSView {
     
     private var dragAnchorOffset: Int?
     private var activeOffset: Int?
+    private var listenerToken: UUID?
     
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     
     private func setupManagerCallback() {
-        manager?.onSelectionChanged = { [weak self] in
+        if let token = listenerToken, let oldManager = manager {
+            oldManager.removeInternalSelectionListener(token: token)
+        }
+        listenerToken = manager?.addInternalSelectionListener { [weak self] in
             self?.needsDisplay = true
         }
     }
-    
     
     override func becomeFirstResponder() -> Bool {
         if let manager = manager {
@@ -50,7 +155,7 @@ final class MacOSSelectionTrackingView: NSView {
     // MARK: - Hit Testing & Event Passthrough
     
     public override func hitTest(_ point: NSPoint) -> NSView? {
-        let localPoint = superview != nil ? convert(point, from: superview) : point
+        let localPoint = superview != nil ? convert(point, from: superview) : convert(point, from: nil)
         guard bounds.contains(localPoint) else { return nil }
         guard let manager = manager, !manager.document.isEmpty else { return nil }
         
@@ -58,6 +163,18 @@ final class MacOSSelectionTrackingView: NSView {
         case .container:
             return self
         case .textOnly(let padding):
+            if manager.hasSelection {
+                var isNearSelection = false
+                manager.document.forEachOverlappingSlice(in: manager.globalSelectedRange) { slice, _ in
+                    if slice.element.frame.insetBy(dx: -padding - 4, dy: -padding - 4).contains(localPoint) {
+                        isNearSelection = true
+                    }
+                }
+                if isNearSelection {
+                    return self
+                }
+            }
+            
             for elem in manager.document.elements {
                 let paddedFrame = elem.frame.insetBy(dx: -padding, dy: -padding)
                 if paddedFrame.contains(localPoint) {

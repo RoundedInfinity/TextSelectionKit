@@ -292,6 +292,7 @@ final class CachedElementLayout {
 // MARK: - Virtual Text Document
 
 struct VirtualTextDocument {
+    private(set) var rawElements: [TextElementRegistration] = []
     private(set) var elements: [TextElementRegistration] = []
     private(set) var slices: [VirtualElementSlice] = []
     private(set) var totalLength: Int = 0
@@ -304,9 +305,10 @@ struct VirtualTextDocument {
     }
     
     mutating func update(elements: [TextElementRegistration]) {
-        if self.elements == elements && !self.slices.isEmpty {
+        if self.rawElements == elements && !self.slices.isEmpty {
             return
         }
+        self.rawElements = elements
         
         self.elements = elements.sorted {
             if $0.orderIndex != $1.orderIndex {
@@ -427,29 +429,69 @@ struct VirtualTextDocument {
     
     func attributedString(in globalRange: Range<Int>) -> AttributedString {
         guard !globalRange.isEmpty else { return AttributedString() }
-        var result = AttributedString()
-        var previousSlice: VirtualElementSlice?
+        let clampedLower = max(0, min(globalRange.lowerBound, totalLength))
+        let clampedUpper = max(0, min(globalRange.upperBound, totalLength))
+        guard clampedLower < clampedUpper else { return AttributedString() }
+        let targetRange = clampedLower..<clampedUpper
         
-        forEachOverlappingSlice(in: globalRange) { slice, localRange in
-            if let prev = previousSlice {
-                result.append(AttributedString(prev.element.delimiter))
+        var result = AttributedString()
+        
+        for (index, slice) in slices.enumerated() {
+            // 1. Element text segment
+            let elemGlobalRange = slice.globalRange
+            if elemGlobalRange.lowerBound >= targetRange.upperBound {
+                break
             }
-            previousSlice = slice
             
-            let baseAttr = slice.element.attributedString ?? AttributedString(slice.element.text)
-            let text = slice.element.text
-            let nsRange = NSRange(location: localRange.lowerBound, length: localRange.count)
+            let elemOverlapLower = max(elemGlobalRange.lowerBound, targetRange.lowerBound)
+            let elemOverlapUpper = min(elemGlobalRange.upperBound, targetRange.upperBound)
             
-            if let strRange = Range(nsRange, in: text),
-               let attrStart = AttributedString.Index(strRange.lowerBound, within: baseAttr),
-               let attrEnd = AttributedString.Index(strRange.upperBound, within: baseAttr) {
-                result.append(baseAttr[attrStart..<attrEnd])
-            } else {
-                let utf16 = text.utf16
-                let startIdx = utf16.index(utf16.startIndex, offsetBy: localRange.lowerBound, limitedBy: utf16.endIndex) ?? utf16.startIndex
-                let endIdx = utf16.index(utf16.startIndex, offsetBy: localRange.upperBound, limitedBy: utf16.endIndex) ?? utf16.endIndex
-                if let plainSlice = String(utf16[startIdx..<endIdx]) {
-                    result.append(AttributedString(plainSlice))
+            if elemOverlapLower < elemOverlapUpper {
+                let localRange = (elemOverlapLower - elemGlobalRange.lowerBound)..<(elemOverlapUpper - elemGlobalRange.lowerBound)
+                let baseAttr = slice.element.attributedString ?? AttributedString(slice.element.text)
+                let text = slice.element.text
+                let nsRange = NSRange(location: localRange.lowerBound, length: localRange.count)
+                
+                if let strRange = Range(nsRange, in: text),
+                   let attrStart = AttributedString.Index(strRange.lowerBound, within: baseAttr),
+                   let attrEnd = AttributedString.Index(strRange.upperBound, within: baseAttr) {
+                    result.append(baseAttr[attrStart..<attrEnd])
+                } else {
+                    let utf16 = text.utf16
+                    let startIdx = utf16.index(utf16.startIndex, offsetBy: localRange.lowerBound, limitedBy: utf16.endIndex) ?? utf16.startIndex
+                    let endIdx = utf16.index(utf16.startIndex, offsetBy: localRange.upperBound, limitedBy: utf16.endIndex) ?? utf16.endIndex
+                    if let plainSlice = String(utf16[startIdx..<endIdx]) {
+                        result.append(AttributedString(plainSlice))
+                    }
+                }
+            }
+            
+            // 2. Delimiter segment (between elements)
+            if index < slices.count - 1 {
+                let delim = slice.element.delimiter
+                let delimLength = delim.utf16.count
+                if delimLength > 0 {
+                    let delimGlobalRange = elemGlobalRange.upperBound..<(elemGlobalRange.upperBound + delimLength)
+                    if delimGlobalRange.lowerBound >= targetRange.upperBound {
+                        break
+                    }
+                    let delimOverlapLower = max(delimGlobalRange.lowerBound, targetRange.lowerBound)
+                    let delimOverlapUpper = min(delimGlobalRange.upperBound, targetRange.upperBound)
+                    
+                    if delimOverlapLower < delimOverlapUpper {
+                        let localDelimRange = (delimOverlapLower - delimGlobalRange.lowerBound)..<(delimOverlapUpper - delimGlobalRange.lowerBound)
+                        let nsRange = NSRange(location: localDelimRange.lowerBound, length: localDelimRange.count)
+                        if let strRange = Range(nsRange, in: delim) {
+                            result.append(AttributedString(delim[strRange]))
+                        } else {
+                            let utf16 = delim.utf16
+                            let startIdx = utf16.index(utf16.startIndex, offsetBy: localDelimRange.lowerBound, limitedBy: utf16.endIndex) ?? utf16.startIndex
+                            let endIdx = utf16.index(utf16.startIndex, offsetBy: localDelimRange.upperBound, limitedBy: utf16.endIndex) ?? utf16.endIndex
+                            if let plainSlice = String(utf16[startIdx..<endIdx]) {
+                                result.append(AttributedString(plainSlice))
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -515,11 +557,24 @@ struct VirtualTextDocument {
             return totalLength
         }
         
-        // 3. Nearest 2D distance check (weighted vertical distance)
+        // 3. Nearest 2D distance check (strongly prioritize elements containing point.y on the same line)
         var bestSlice = slices[0]
         var minDistance = CGFloat.greatestFiniteMagnitude
         
         for s in slices {
+            let dy: CGFloat
+            if point.y < s.element.frame.minY {
+                dy = s.element.frame.minY - point.y
+                if (dy * dy * 100) >= minDistance {
+                    // Since slices are Y-sorted, subsequent slices are even further vertically
+                    break
+                }
+            } else if point.y > s.element.frame.maxY {
+                dy = point.y - s.element.frame.maxY
+            } else {
+                dy = 0
+            }
+            
             let dx: CGFloat
             if point.x < s.element.frame.minX {
                 dx = s.element.frame.minX - point.x
@@ -529,16 +584,7 @@ struct VirtualTextDocument {
                 dx = 0
             }
             
-            let dy: CGFloat
-            if point.y < s.element.frame.minY {
-                dy = s.element.frame.minY - point.y
-            } else if point.y > s.element.frame.maxY {
-                dy = point.y - s.element.frame.maxY
-            } else {
-                dy = 0
-            }
-            
-            let distance = (dy * dy * 4) + (dx * dx)
+            let distance = (dy * dy * 100) + (dx * dx)
             if distance < minDistance {
                 minDistance = distance
                 bestSlice = s

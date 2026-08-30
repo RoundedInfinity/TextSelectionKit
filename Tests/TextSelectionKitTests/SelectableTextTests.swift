@@ -8,20 +8,20 @@ struct SelectableTextTests {
     @Test("Plain text and markdown initializer parsing")
     @MainActor
     func testInitializers() {
-        let plain = SelectableText("Plain Text")
-        _ = plain
+        let plain = SelectableText(verbatim: "Plain Text")
+        #expect(plain.rawText == "Plain Text")
         
         let markdown = SelectableText("**Bold** and *Italic*")
-        _ = markdown
+        #expect(markdown.rawText == "Bold and Italic")
         
         let verbatim = SelectableText(verbatim: "**Verbatim**")
-        _ = verbatim
+        #expect(verbatim.rawText == "**Verbatim**")
         
         let explicitMarkdown = SelectableText(markdown: "`code block`")
-        _ = explicitMarkdown
+        #expect(explicitMarkdown.rawText == "code block")
         
         let attr = SelectableText(AttributedString("Direct Attributed"))
-        _ = attr
+        #expect(attr.rawText == "Direct Attributed")
     }
     
     @Test("Direct styling modifiers chaining")
@@ -39,7 +39,7 @@ struct SelectableTextTests {
             .foregroundStyle(.green)
             .foregroundColor(.yellow)
         
-        _ = text
+        #expect(text.rawText == "Base Text")
     }
     
     @Test("Concatenation operator (+) creates compound SelectableText")
@@ -49,18 +49,72 @@ struct SelectableTextTests {
         let part2 = SelectableText("Second Part").italic()
         let combined = part1 + part2
         
-        _ = combined
+        #expect(combined.rawText == "First Part Second Part")
     }
     
     @Test("LocalizedStringKey and LocalizationValue resolution")
     @MainActor
     func testLocalizedKeyResolution() {
         let key: LocalizedStringKey = "Hello **World**"
-        let selectableFromKey = SelectableText(key)
-        _ = selectableFromKey
+        let selectableFromKey = SelectableText(localizedKey: key)
+        #expect(selectableFromKey.rawText == "Hello World")
         
         let localizedValue = SelectableText(localized: "Hello **World**")
-        _ = localizedValue
+        #expect(localizedValue.rawText == "Hello World")
+    }
+    
+    @Test("String literal with interpolation and localization resolution")
+    @MainActor
+    func testStringLiteralLocalization() {
+        let count = 42
+        let textWithInterpolation = SelectableText("Items count: \(count)")
+        #expect(textWithInterpolation.rawText == "Items count: 42")
+    }
+    
+    @Test("Runtime String variables do not get markdown parsed and preserve verbatim content")
+    @MainActor
+    func testRuntimeStringDoesNotParseMarkdown() {
+        let snakeCase = "snake_case_user_id"
+        let text1 = SelectableText(snakeCase)
+        #expect(text1.rawText == "snake_case_user_id")
+        
+        let math = "2 * 3 = 6"
+        let text2 = SelectableText(math)
+        #expect(text2.rawText == "2 * 3 = 6")
+        
+        let citation = "[1] Reference Title"
+        let text3 = SelectableText(citation)
+        #expect(text3.rawText == "[1] Reference Title")
+        
+        let tilde = "approx ~ 50%"
+        let text4 = SelectableText(tilde)
+        #expect(text4.rawText == "approx ~ 50%")
+    }
+    
+    @Test("Explicit markdown initializer parses inline markdown formatting")
+    @MainActor
+    func testExplicitMarkdownParsing() {
+        let md = SelectableText(markdown: "**Bold** and *Italic* and `code`")
+        #expect(md.rawText == "Bold and Italic and code")
+        
+        // Assert attributes are present
+        let boldRun = md.attributedText.runs.first { run in
+            String(md.attributedText[run.range].characters) == "Bold"
+        }
+        #expect(boldRun?.inlinePresentationIntent?.contains(.stronglyEmphasized) == true)
+        
+        let italicRun = md.attributedText.runs.first { run in
+            String(md.attributedText[run.range].characters) == "Italic"
+        }
+        #expect(italicRun?.inlinePresentationIntent?.contains(.emphasized) == true)
+    }
+    
+    @Test("Verbatim initializer preserves all markdown tokens intact")
+    @MainActor
+    func testVerbatimPreservesAllTokens() {
+        let verbatim = SelectableText(verbatim: "**Bold** and *Italic* and `code` and [link](url)")
+        #expect(verbatim.rawText == "**Bold** and *Italic* and `code` and [link](url)")
+        #expect(String(verbatim.attributedText.characters) == "**Bold** and *Italic* and `code` and [link](url)")
     }
     
     @Test("View.selectionContainer() modifier wraps view in SelectionContainer")

@@ -272,4 +272,113 @@ struct SelectionManagerTests {
         let allIDs = manager.selectedIDs
         #expect(allIDs == [AnyHashable("header"), AnyHashable(101)])
     }
+    
+    @Test("Public onSelectionChanged callback is not overwritten by platform overlay mounting")
+    @MainActor
+    func testOverlayDoesNotOverwritePublicCallback() {
+        let manager = SelectionManager()
+        let elem = makeRegistration(text: "Overlay Isolation Test")
+        manager.updateRegisteredElements([elem])
+        
+        var userCallbackFired = 0
+        manager.onSelectionChanged = {
+            userCallbackFired += 1
+        }
+        
+        #if os(macOS)
+        let trackingView = MacOSSelectionTrackingView()
+        trackingView.manager = manager
+        #else
+        let trackingView = NativeSelectionTrackingUIView()
+        trackingView.manager = manager
+        #endif
+        
+        // Changing selection should fire user's callback
+        manager.setGlobalSelection(0..<7)
+        #expect(userCallbackFired == 1)
+        
+        // Clearing selection should fire user's callback again
+        manager.clearSelection()
+        #expect(userCallbackFired == 2)
+    }
+    
+    @Test("Setting public onSelectionChanged after overlay mount preserves internal handler")
+    @MainActor
+    func testSettingPublicCallbackPreservesInternalHandler() {
+        let manager = SelectionManager()
+        let elem = makeRegistration(text: "Handler Preservation Test")
+        manager.updateRegisteredElements([elem])
+        
+        var internalHandlerFired = 0
+        manager.onInternalSelectionChanged = {
+            internalHandlerFired += 1
+        }
+        
+        var userCallbackFired = 0
+        manager.onSelectionChanged = {
+            userCallbackFired += 1
+        }
+        
+        manager.setGlobalSelection(0..<5)
+        #expect(userCallbackFired == 1)
+        #expect(internalHandlerFired == 1)
+        
+        // Reassign public callback to a new closure
+        var secondUserCallbackFired = 0
+        manager.onSelectionChanged = {
+            secondUserCallbackFired += 1
+        }
+        
+        manager.clearSelection()
+        #expect(userCallbackFired == 1) // first closure was replaced
+        #expect(secondUserCallbackFired == 1) // second closure fired
+        #expect(internalHandlerFired == 2) // internal handler still fired
+    }
+    
+    @Test("Observable totalLength and fullText update reactively and delimiter-only selection reports hasSelection true")
+    @MainActor
+    func testObservableDocumentPropertiesAndDelimiterOnlySelection() {
+        let manager = SelectionManager()
+        #expect(manager.totalLength == 0)
+        #expect(manager.fullText == "")
+        
+        let elem1 = makeRegistration(text: "Hello")
+        let elem2 = makeRegistration(text: "World")
+        manager.updateRegisteredElements([elem1, elem2])
+        
+        #expect(manager.totalLength == 11)
+        #expect(manager.fullText == "Hello\nWorld")
+        
+        // Select delimiter-only range: offset 5..<6 is "\n"
+        manager.setGlobalSelection(5..<6)
+        #expect(manager.getSelectedText() == "\n")
+        #expect(manager.hasSelection)
+        #expect(manager.isSelecting)
+    }
+    
+    @Test("Redundant element updates with unchanged selection state do not fire callbacks or redundant state changes")
+    @MainActor
+    func testRedundantElementUpdatesAvoidSpuriousMutations() {
+        let manager = SelectionManager()
+        let elem1 = makeRegistration(text: "Alpha")
+        let elem2 = makeRegistration(text: "Beta")
+        let elements = [elem1, elem2]
+        
+        manager.updateRegisteredElements(elements)
+        manager.setGlobalSelection(0..<5)
+        
+        var callbackCount = 0
+        manager.onSelectionChanged = {
+            callbackCount += 1
+        }
+        
+        // Updating with identical elements and identical selection
+        manager.updateRegisteredElements(elements)
+        #expect(callbackCount == 0)
+        
+        manager.updateRegisteredElements(elements)
+        #expect(callbackCount == 0)
+    }
 }
+
+

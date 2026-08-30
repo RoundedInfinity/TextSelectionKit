@@ -75,6 +75,9 @@ public struct SelectionContainer<Content: View>: View {
             .onPreferenceChange(ElementRegistrationKey.self) { elements in
                 manager.updateRegisteredElements(elements)
             }
+            #if os(macOS)
+            .background(MacOSSelectionHighlightOverlay(manager: manager))
+            #endif
             .overlay(OverlayContainer(manager: manager, hitTestPolicy: hitTestPolicy))
     }
     

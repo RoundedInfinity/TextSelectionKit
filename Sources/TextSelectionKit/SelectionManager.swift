@@ -45,10 +45,10 @@ public final class SelectionManager: Identifiable {
     /// The unique identifier of this selection manager.
     public let id = UUID()
     
-    /// The active character selection ranges keyed by text element identifier.
+    /// The active selection ranges in UTF-16 code-unit offsets, keyed by text element identifier.
     public private(set) var selections: [AnyHashable: Range<Int>] = [:]
     
-    /// The continuous global character range of the active selection in the virtual document.
+    /// The continuous global range of the active selection in the virtual document, in UTF-16 code-unit offsets.
     public private(set) var globalSelectedRange: Range<Int> = 0..<0
     
     /// A Boolean value indicating whether a selection drag or interaction is currently active.
@@ -61,30 +61,80 @@ public final class SelectionManager: Identifiable {
     @ObservationIgnored
     public var onSelectionChanged: (() -> Void)?
     
+    @ObservationIgnored
+    private var internalSelectionListeners: [UUID: () -> Void] = [:]
+    
+    /// Registers an internal listener invoked when selection changes, returning a token to unregister.
+    @discardableResult
+    internal func addInternalSelectionListener(_ listener: @escaping () -> Void) -> UUID {
+        let token = UUID()
+        internalSelectionListeners[token] = listener
+        return token
+    }
+    
+    /// Unregisters an internal listener by token.
+    internal func removeInternalSelectionListener(token: UUID) {
+        internalSelectionListeners.removeValue(forKey: token)
+    }
+    
+    /// An internal callback invoked when selection changes, used by platform overlays without interfering with `onSelectionChanged`.
+    @ObservationIgnored
+    internal var onInternalSelectionChanged: (() -> Void)? {
+        get { internalSelectionListeners.values.first }
+        set {
+            let fixedKey = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+            if let newValue = newValue {
+                internalSelectionListeners[fixedKey] = newValue
+            } else {
+                internalSelectionListeners.removeValue(forKey: fixedKey)
+            }
+        }
+    }
+    
     /// Creates a new selection manager.
     public init() {}
     
-    /// The total character count across all registered elements in the virtual document.
-    public var totalLength: Int {
-        document.totalLength
+    private func notifySelectionChanged() {
+        for listener in internalSelectionListeners.values {
+            listener()
+        }
+        onSelectionChanged?()
     }
     
+    /// The total length in UTF-16 code units across all registered elements and delimiters in the virtual document.
+    public private(set) var totalLength: Int = 0
+    
     /// The concatenated full text across all registered elements in the virtual document.
-    public var fullText: String {
-        document.fullText
-    }
+    public private(set) var fullText: String = ""
     
     func updateRegisteredElements(_ elements: [TextElementRegistration]) {
         self.document.update(elements: elements)
+        
+        let newTotalLength = document.totalLength
+        if self.totalLength != newTotalLength {
+            self.totalLength = newTotalLength
+        }
+        
+        let newFullText = document.fullText
+        if self.fullText != newFullText {
+            self.fullText = newFullText
+        }
+        
         // Refresh per-element selections if global selection was set
         if !globalSelectedRange.isEmpty {
-            let maxLen = document.totalLength
+            let maxLen = newTotalLength
             let lower = max(0, min(globalSelectedRange.lowerBound, maxLen))
             let upper = max(lower, min(globalSelectedRange.upperBound, maxLen))
             let clampedRange = lower..<upper
-            self.globalSelectedRange = clampedRange
-            self.selections = document.perElementSelections(from: clampedRange)
-            self.isSelecting = !clampedRange.isEmpty
+            let newSelections = document.perElementSelections(from: clampedRange)
+            let newIsSelecting = !clampedRange.isEmpty
+            
+            if self.globalSelectedRange != clampedRange || self.selections != newSelections || self.isSelecting != newIsSelecting {
+                self.globalSelectedRange = clampedRange
+                self.selections = newSelections
+                self.isSelecting = newIsSelecting
+                notifySelectionChanged()
+            }
         }
     }
     
@@ -92,9 +142,9 @@ public final class SelectionManager: Identifiable {
     
     /// Programmatically sets the active global selection range.
     ///
-    /// Character offsets are automatically clamped to valid document bounds `0..<totalLength`.
+    /// Offsets are specified in UTF-16 code units and are automatically clamped to valid document bounds `0..<totalLength`.
     ///
-    /// - Parameter range: The continuous character range to select within the virtual document.
+    /// - Parameter range: The continuous range in UTF-16 code-unit offsets to select within the virtual document.
     public func setGlobalSelection(_ range: Range<Int>) {
         let lower = max(0, min(range.lowerBound, document.totalLength))
         let upper = max(lower, min(range.upperBound, document.totalLength))
@@ -112,7 +162,7 @@ public final class SelectionManager: Identifiable {
         self.globalSelectedRange = clampedRange
         self.selections = newSelections
         self.isSelecting = !clampedRange.isEmpty
-        self.onSelectionChanged?()
+        self.notifySelectionChanged()
     }
     
     /// Clears the active selection.
@@ -121,7 +171,7 @@ public final class SelectionManager: Identifiable {
         self.globalSelectedRange = 0..<0
         self.selections.removeAll()
         self.isSelecting = false
-        self.onSelectionChanged?()
+        self.notifySelectionChanged()
     }
     
     /// Selects all text across all registered elements in the container.
@@ -161,15 +211,15 @@ public final class SelectionManager: Identifiable {
     
     /// A Boolean value indicating whether there is an active, non-empty selection.
     public var hasSelection: Bool {
-        !globalSelectedRange.isEmpty && selections.values.contains { !$0.isEmpty }
+        !globalSelectedRange.isEmpty && !getSelectedText().isEmpty
     }
     
     // MARK: - Element Identification & Queries
     
-    /// Returns the local character selection range for the specified element identifier, or `nil` if not selected.
+    /// Returns the local selection range in UTF-16 code-unit offsets for the specified element identifier, or `nil` if not selected.
     ///
     /// - Parameter id: The identifier of the element to query.
-    /// - Returns: The local `Range<Int>` within the element's text if currently selected, otherwise `nil`.
+    /// - Returns: The local `Range<Int>` in UTF-16 code-unit offsets within the element's text if currently selected, otherwise `nil`.
     public func selection<ID: Hashable>(for id: ID) -> Range<Int>? {
         selections[AnyHashable(id)]
     }

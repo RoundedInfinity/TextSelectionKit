@@ -45,6 +45,51 @@ struct PlatformBridgeTests {
         #expect(nsAttr.length == "Rich Text Test".utf16.count)
     }
     
+    #if os(macOS)
+    @Test("macOS selection highlight uses full opacity system colors")
+    @MainActor
+    func testMacOSSelectionHighlightColors() {
+        let highlightView = MacOSSelectionHighlightView()
+        
+        let keyColor = highlightView.highlightColor(isKey: true)
+        #expect(keyColor == NSColor.selectedTextBackgroundColor)
+        #expect(keyColor.alphaComponent == 1.0)
+        
+        let nonKeyColor = highlightView.highlightColor(isKey: false)
+        #expect(nonKeyColor == NSColor.unemphasizedSelectedTextBackgroundColor)
+        #expect(nonKeyColor.alphaComponent == 1.0)
+    }
+    
+    @Test("macOS selection highlight view marks needsDisplay on selection changes")
+    @MainActor
+    func testMacOSSelectionHighlightViewNeedsDisplayOnSelectionChange() {
+        let manager = SelectionManager()
+        let highlightView = MacOSSelectionHighlightView()
+        highlightView.manager = manager
+        
+        var displayCallbackCount = 0
+        highlightView.onNeedsDisplay = {
+            displayCallbackCount += 1
+        }
+        
+        let font = NSFont.systemFont(ofSize: 14)
+        let elem = TextElementRegistration(
+            id: UUID(),
+            text: "macOS Highlight Test",
+            frame: CGRect(x: 0, y: 0, width: 200, height: 20),
+            font: font,
+            orderIndex: 0
+        )
+        manager.updateRegisteredElements([elem])
+        
+        manager.setGlobalSelection(0..<5)
+        #expect(displayCallbackCount == 1)
+        
+        manager.clearSelection()
+        #expect(displayCallbackCount == 2)
+    }
+    #endif
+    
     #if os(iOS) || os(visionOS) || os(tvOS)
     @Test("Dynamic Type scaling on iOS scales text styles proportionally")
     func testDynamicTypeScaling() {

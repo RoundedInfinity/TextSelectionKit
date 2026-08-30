@@ -189,4 +189,55 @@ struct GeometryLayoutTests {
             #expect(r.height > 0)
         }
     }
+    
+    @Test("Closest offset hit-testing efficiently resolves across many stacked elements")
+    func testClosestGlobalOffsetScalingAcrossManyElements() {
+        var elements: [TextElementRegistration] = []
+        for i in 0..<50 {
+            let elem = makeRegistration(
+                text: "Line item number \(i)",
+                frame: CGRect(x: 10, y: CGFloat(i * 30), width: 300, height: 25)
+            )
+            elements.append(elem)
+        }
+        let doc = VirtualTextDocument(elements: elements)
+        
+        // Far above
+        #expect(doc.closestGlobalOffset(to: CGPoint(x: 50, y: -500)) == 0)
+        
+        // Element 0
+        let offset0 = doc.closestGlobalOffset(to: CGPoint(x: 15, y: 12))
+        #expect(offset0 >= 0 && offset0 <= 20)
+        
+        // Element 25 (middle: y = 750)
+        let offset25 = doc.closestGlobalOffset(to: CGPoint(x: 15, y: 760))
+        let (slice25, _) = doc.slice(forGlobalOffset: offset25)!
+        #expect(slice25.element.text.contains("25"))
+        
+        // Element 49 (bottom: y = 1470)
+        let offset49 = doc.closestGlobalOffset(to: CGPoint(x: 15, y: 1480))
+        let (slice49, _) = doc.slice(forGlobalOffset: offset49)!
+        #expect(slice49.element.text.contains("49"))
+        
+        // Far below
+        #expect(doc.closestGlobalOffset(to: CGPoint(x: 50, y: 2500)) == doc.totalLength)
+    }
+    
+    @Test("Horizontal line containment prioritizes same row over vertically offset lines")
+    func testHorizontalLineContainmentHitTesting() {
+        let heading = makeRegistration(
+            text: "Heading",
+            frame: CGRect(x: 10, y: 10, width: 60, height: 20)
+        )
+        let paragraph = makeRegistration(
+            text: "Longer paragraph text located on the line below.",
+            frame: CGRect(x: 10, y: 40, width: 350, height: 20)
+        )
+        let doc = VirtualTextDocument(elements: [heading, paragraph])
+        
+        // Clicking far to the right of the heading on line 1 (x: 250, y: 15)
+        let offset = doc.closestGlobalOffset(to: CGPoint(x: 250, y: 15))
+        #expect(offset == heading.text.utf16.count)
+        #expect(doc.text(in: 0..<offset) == "Heading")
+    }
 }

@@ -152,9 +152,9 @@ extension View {
 /// If rendered outside of a ``SelectionContainer``, `SelectableText` falls back to individual
 /// `.textSelection(.enabled)` behavior and logs a diagnostic warning in debug builds.
 public struct SelectableText: View {
-    private let rawText: String
-    private let attributedText: AttributedString
-    private let customId: AnyHashable?
+    let rawText: String
+    let attributedText: AttributedString
+    let customId: AnyHashable?
     
     // Stable persistent element identity if customId is not provided
     @State private var fallbackId = UUID()
@@ -177,6 +177,10 @@ public struct SelectableText: View {
     @Environment(\.selectionDelimiter) private var selectionDelimiter
     
     /// Creates a selectable text view from a localized string resource.
+    /// Creates a selectable text view from a localized string resource.
+    ///
+    /// String literals and string interpolations passed to `SelectableText("...")` use this initializer,
+    /// participating in full Foundation localization and inline Markdown rendering.
     ///
     /// - Parameters:
     ///   - resource: The localized string resource to look up.
@@ -215,7 +219,7 @@ public struct SelectableText: View {
     /// - Parameters:
     ///   - key: The key for the localized string.
     ///   - id: An optional custom identifier for element-level selection queries. Defaults to `nil`.
-    public init(_ key: LocalizedStringKey, id: AnyHashable? = nil) {
+    public init(localizedKey key: LocalizedStringKey, id: AnyHashable? = nil) {
         let desc = String(describing: key)
         var rawKey = desc
         if let startRange = desc.range(of: "key: \""),
@@ -233,21 +237,19 @@ public struct SelectableText: View {
         self.customId = id
     }
     
-    /// Creates a selectable text view from a string, parsing inline Markdown syntax if present.
+    /// Creates a selectable text view from a runtime string without localization or Markdown parsing.
+    ///
+    /// This matches SwiftUI `Text(someString)` behavior: dynamic string variables are displayed verbatim.
+    /// To parse inline Markdown from a dynamic string, use ``init(markdown:id:)``.
     ///
     /// - Parameters:
-    ///   - text: The string to display. If it contains Markdown formatting tokens (such as `**bold**` or `*italic*`),
-    ///     they are rendered with the appropriate styles.
+    ///   - content: The dynamic string to display verbatim.
     ///   - id: An optional custom identifier for element-level selection queries. Defaults to `nil`.
-    public init(_ text: String, id: AnyHashable? = nil) {
-        if let attr = try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)),
-           (text.contains("*") || text.contains("`") || text.contains("_") || text.contains("~") || text.contains("[")) {
-            self.attributedText = attr
-            self.rawText = String(attr.characters)
-        } else {
-            self.attributedText = AttributedString(text)
-            self.rawText = text
-        }
+    @_disfavoredOverload
+    public init<S: StringProtocol>(_ content: S, id: AnyHashable? = nil) {
+        let str = String(content)
+        self.attributedText = AttributedString(str)
+        self.rawText = str
         self.customId = id
     }
     
@@ -285,6 +287,7 @@ public struct SelectableText: View {
     /// - Parameters:
     ///   - attributedString: The attributed string to display.
     ///   - id: An optional custom identifier for element-level selection queries. Defaults to `nil`.
+    @_disfavoredOverload
     public init(_ attributedString: AttributedString, id: AnyHashable? = nil) {
         self.attributedText = attributedString
         self.rawText = String(attributedString.characters)
@@ -358,38 +361,10 @@ public struct SelectableText: View {
         }
     }
     
-    #if os(macOS)
-    @ViewBuilder
-    private func renderedText(for effectiveAttr: AttributedString, rawText: String) -> some View {
-        let activeRange = selectionManager?.selections[effectiveId]
-        let highlightedAttr = attributedFormattedText(baseAttr: effectiveAttr, rawText: rawText, for: activeRange)
-        Text(highlightedAttr)
-    }
-    
-    private func attributedFormattedText(baseAttr: AttributedString, rawText: String, for selectionRange: Range<Int>?) -> AttributedString {
-        var attr = baseAttr
-        
-        guard let range = selectionRange, !range.isEmpty else {
-            return attr
-        }
-        
-        let nsRange = NSRange(location: max(0, range.lowerBound), length: min(range.upperBound, rawText.utf16.count) - max(0, range.lowerBound))
-        if let strRange = Range(nsRange, in: rawText),
-           let attrStart = AttributedString.Index(strRange.lowerBound, within: attr),
-           let attrEnd = AttributedString.Index(strRange.upperBound, within: attr) {
-            let selectionAttrRange = attrStart..<attrEnd
-            attr[selectionAttrRange].backgroundColor = Color(nsColor: NSColor.selectedTextBackgroundColor)
-            attr[selectionAttrRange].foregroundColor = Color(nsColor: NSColor.selectedTextColor)
-        }
-        
-        return attr
-    }
-    #else
     @ViewBuilder
     private func renderedText(for effectiveAttr: AttributedString, rawText: String) -> some View {
         Text(effectiveAttr)
     }
-    #endif
 }
 
 // MARK: - Direct Text Styling Modifiers

@@ -45,7 +45,7 @@ final class NativeSelectionTrackingUIView: UIView, UITextInput {
     var hitTestPolicy: SelectionHitTestPolicy = .textOnly
     
     private func setupManagerCallback() {
-        manager?.onSelectionChanged = { [weak self] in
+        manager?.onInternalSelectionChanged = { [weak self] in
             guard let self = self else { return }
             self.setNeedsDisplay()
             if self.manager?.hasSelection == true {
@@ -113,6 +113,23 @@ final class NativeSelectionTrackingUIView: UIView, UITextInput {
     private var editMenuInteraction: UIEditMenuInteraction?
     var contextMenuProvider: SelectionContextMenuProvider?
     
+    // Cached selection rects for hit-testing and UITextInput selection rects
+    private var cachedSelectionRange: Range<Int>?
+    private var cachedDocumentTotalLength: Int = -1
+    private var cachedSelectionLineRects: [CGRect] = []
+    
+    private func cachedLineSelectionRects(for range: Range<Int>) -> [CGRect] {
+        guard let manager = manager else { return [] }
+        if cachedSelectionRange == range && cachedDocumentTotalLength == manager.totalLength {
+            return cachedSelectionLineRects
+        }
+        let rects = manager.document.lineSelectionRects(for: range)
+        cachedSelectionRange = range
+        cachedDocumentTotalLength = manager.totalLength
+        cachedSelectionLineRects = rects
+        return rects
+    }
+    
     // MARK: - Initialization
     
     override init(frame: CGRect) {
@@ -146,10 +163,19 @@ final class NativeSelectionTrackingUIView: UIView, UITextInput {
         
         // If selection is currently active, capture touches near the selection rects/handles
         if manager.hasSelection {
-            let selectionRects = manager.document.lineSelectionRects(for: manager.globalSelectedRange)
-            let isNearSelection = selectionRects.contains { $0.insetBy(dx: -24, dy: -24).contains(point) }
-            if isNearSelection {
-                return self
+            // Fast coarse check: only test elements overlapping the active selection
+            var isNearSelectedElement = false
+            manager.document.forEachOverlappingSlice(in: manager.globalSelectedRange) { slice, _ in
+                if slice.element.frame.insetBy(dx: -24, dy: -24).contains(point) {
+                    isNearSelectedElement = true
+                }
+            }
+            
+            if isNearSelectedElement {
+                let selectionRects = cachedLineSelectionRects(for: manager.globalSelectedRange)
+                if selectionRects.contains(where: { $0.insetBy(dx: -24, dy: -24).contains(point) }) {
+                    return self
+                }
             }
         }
         
@@ -321,7 +347,7 @@ final class NativeSelectionTrackingUIView: UIView, UITextInput {
             }
             return .zero
         }
-        let rects = manager.document.lineSelectionRects(for: vRange.range)
+        let rects = cachedLineSelectionRects(for: vRange.range)
         return rects.first ?? manager.document.characterRect(atGlobalOffset: vRange.range.lowerBound)
     }
     
@@ -346,7 +372,7 @@ final class NativeSelectionTrackingUIView: UIView, UITextInput {
             return false
         }()
         
-        let lineRects = manager.document.lineSelectionRects(for: vRange.range)
+        let lineRects = cachedLineSelectionRects(for: vRange.range)
         guard !lineRects.isEmpty else { return [] }
         let dir: NSWritingDirection = isRTL ? .rightToLeft : .leftToRight
         
