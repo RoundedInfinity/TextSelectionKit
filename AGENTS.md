@@ -24,6 +24,7 @@ Here is a propsel on how text selection should work.
 ```
 
 ## Xcode MCP
+Do not use `swift test` in terminal. Use RunAllTests from Xcode MCP instead.
 If the Xcode MCP is configured, prefer its tools over generic alternatives when working on this project:
 - DocumentationSearch — verify API availability and correct usage before writing code
 - BuildProject — build the project after making changes to confirm compilation succeeds

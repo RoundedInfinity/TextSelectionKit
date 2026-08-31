@@ -142,10 +142,13 @@ enum PlatformAttributedStringBuilder {
                 mutable.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: nsRange)
             }
             
-            if let kern = run.kern {
+            if let tracking = run.tracking, let kern = run.kern {
+                mutable.addAttribute(.tracking, value: tracking, range: nsRange)
                 mutable.addAttribute(.kern, value: kern, range: nsRange)
             } else if let tracking = run.tracking {
-                mutable.addAttribute(.kern, value: tracking, range: nsRange)
+                mutable.addAttribute(.tracking, value: tracking, range: nsRange)
+            } else if let kern = run.kern {
+                mutable.addAttribute(.kern, value: kern, range: nsRange)
             }
             
             if let baselineOffset = run.baselineOffset {
@@ -259,10 +262,27 @@ enum PlatformFontResolver {
         var size: CGFloat?
         var textStyle: String?
         var weightVal: CGFloat?
+        var fontDesign: Font.Design?
         var isBold = false
         var isItalic = false
         var isMonospaced = false
         var name: String?
+
+        func extractWeight(from value: Any) -> CGFloat? {
+            if let v = value as? CGFloat { return v }
+            if let v = value as? Double { return CGFloat(v) }
+            let m = Mirror(reflecting: value)
+            for c in m.children {
+                if c.label == "value" {
+                    if let v = c.value as? CGFloat { return v }
+                    if let v = c.value as? Double { return CGFloat(v) }
+                }
+                if let nested = extractWeight(from: c.value) {
+                    return nested
+                }
+            }
+            return nil
+        }
 
         func traverse(_ value: Any) {
             let mirror = Mirror(reflecting: value)
@@ -270,7 +290,16 @@ enum PlatformFontResolver {
             
             if typeName.contains("BoldModifier") { isBold = true }
             if typeName.contains("ItalicModifier") { isItalic = true }
-            if typeName.contains("Monospaced") { isMonospaced = true }
+            if typeName.contains("Monospaced") || typeName.contains("monospaced") {
+                isMonospaced = true
+                fontDesign = .monospaced
+            }
+            if typeName.contains("Rounded") || typeName.contains("rounded") {
+                fontDesign = .rounded
+            }
+            if typeName.contains("Serif") || typeName.contains("serif") {
+                fontDesign = .serif
+            }
             
             for child in mirror.children {
                 guard let label = child.label else {
@@ -294,15 +323,8 @@ enum PlatformFontResolver {
                         name = str.replacing("Optional(\"", with: "").replacing("\")", with: "")
                     }
                 case "weight":
-                    let wMirror = Mirror(reflecting: child.value)
-                    for wChild in wMirror.children {
-                        let inner = Mirror(reflecting: wChild.value)
-                        for iChild in inner.children {
-                            if iChild.label == "value" {
-                                if let v = iChild.value as? CGFloat { weightVal = v }
-                                else if let v = iChild.value as? Double { weightVal = CGFloat(v) }
-                            }
-                        }
+                    if let w = extractWeight(from: child.value) {
+                        weightVal = w
                     }
                 case "value":
                     if typeName.contains("Weight") {
@@ -311,7 +333,16 @@ enum PlatformFontResolver {
                     }
                 case "design":
                     let str = "\(child.value)"
-                    if str.contains("monospaced") { isMonospaced = true }
+                    if str.contains("monospaced") {
+                        isMonospaced = true
+                        fontDesign = .monospaced
+                    } else if str.contains("rounded") {
+                        fontDesign = .rounded
+                    } else if str.contains("serif") {
+                        fontDesign = .serif
+                    } else if str.contains("default") {
+                        fontDesign = .default
+                    }
                 default:
                     break
                 }
@@ -323,15 +354,33 @@ enum PlatformFontResolver {
         traverse(font)
         
         #if os(macOS)
+        func applyDesign(_ design: Font.Design?, to font: NSFont) -> NSFont {
+            guard let design = design else { return font }
+            let systemDesign: NSFontDescriptor.SystemDesign
+            switch design {
+            case .serif: systemDesign = .serif
+            case .rounded: systemDesign = .rounded
+            case .monospaced: systemDesign = .monospaced
+            default: systemDesign = .default
+            }
+            if let descriptor = font.fontDescriptor.withDesign(systemDesign) {
+                return NSFont(descriptor: descriptor, size: font.pointSize) ?? font
+            }
+            return font
+        }
+
         var baseFont: NSFont
         if let name = name, let size = size {
             baseFont = NSFont(name: name, size: size) ?? NSFont.systemFont(ofSize: size)
         } else if let size = size {
             let weight = weightVal.map { NSFont.Weight(rawValue: $0) } ?? (isBold ? .bold : .regular)
-            if isMonospaced {
+            if isMonospaced || fontDesign == .monospaced {
                 baseFont = NSFont.monospacedSystemFont(ofSize: size, weight: weight)
             } else {
                 baseFont = NSFont.systemFont(ofSize: size, weight: weight)
+            }
+            if let fontDesign = fontDesign, fontDesign != .default, fontDesign != .monospaced {
+                baseFont = applyDesign(fontDesign, to: baseFont)
             }
         } else if let textStyle = textStyle {
             let nsStyle: NSFont.TextStyle
@@ -360,8 +409,10 @@ enum PlatformFontResolver {
             } else {
                 baseFont = unscaled
             }
-            if isMonospaced {
+            if isMonospaced || fontDesign == .monospaced {
                 baseFont = baseFont.monospaced
+            } else if let fontDesign = fontDesign, fontDesign != .default {
+                baseFont = applyDesign(fontDesign, to: baseFont)
             }
         } else {
             let defaultFont = NSFont.preferredFont(forTextStyle: .body)
@@ -375,8 +426,10 @@ enum PlatformFontResolver {
             } else {
                 baseFont = defaultFont
             }
-            if isMonospaced {
+            if isMonospaced || fontDesign == .monospaced {
                 baseFont = baseFont.monospaced
+            } else if let fontDesign = fontDesign, fontDesign != .default {
+                baseFont = applyDesign(fontDesign, to: baseFont)
             }
         }
         
@@ -386,7 +439,22 @@ enum PlatformFontResolver {
         return baseFont
         
         #elseif os(iOS) || os(visionOS) || os(tvOS)
-        let baseFont: UIFont
+        func applyDesign(_ design: Font.Design?, to font: UIFont) -> UIFont {
+            guard let design = design else { return font }
+            let systemDesign: UIFontDescriptor.SystemDesign
+            switch design {
+            case .serif: systemDesign = .serif
+            case .rounded: systemDesign = .rounded
+            case .monospaced: systemDesign = .monospaced
+            default: systemDesign = .default
+            }
+            if let descriptor = font.fontDescriptor.withDesign(systemDesign) {
+                return UIFont(descriptor: descriptor, size: font.pointSize)
+            }
+            return font
+        }
+
+        var baseFont: UIFont
         if let name = name, let size = size {
             let unscaled = UIFont(name: name, size: size) ?? UIFont.systemFont(ofSize: size)
             if let traitCollection {
@@ -397,15 +465,16 @@ enum PlatformFontResolver {
         } else if let size = size {
             let weight = weightVal.map { UIFont.Weight(rawValue: $0) } ?? (isBold ? .bold : .regular)
             let unscaled: UIFont
-            if isMonospaced {
+            if isMonospaced || fontDesign == .monospaced {
                 unscaled = UIFont.monospacedSystemFont(ofSize: size, weight: weight)
             } else {
                 unscaled = UIFont.systemFont(ofSize: size, weight: weight)
             }
+            let designed = applyDesign(fontDesign, to: unscaled)
             if let traitCollection {
-                baseFont = UIFontMetrics(forTextStyle: .body).scaledFont(for: unscaled, compatibleWith: traitCollection)
+                baseFont = UIFontMetrics(forTextStyle: .body).scaledFont(for: designed, compatibleWith: traitCollection)
             } else {
-                baseFont = unscaled
+                baseFont = designed
             }
         } else if let textStyle = textStyle {
             let uiStyle: UIFont.TextStyle
@@ -432,10 +501,13 @@ enum PlatformFontResolver {
                 baseFont = UIFont.systemFont(ofSize: prefFont.pointSize, weight: UIFont.Weight(rawValue: weightVal))
             } else if isBold {
                 baseFont = prefFont.bold
-            } else if isMonospaced {
+            } else if isMonospaced || fontDesign == .monospaced {
                 baseFont = UIFont.monospacedSystemFont(ofSize: prefFont.pointSize, weight: .regular)
             } else {
                 baseFont = prefFont
+            }
+            if let fontDesign = fontDesign, fontDesign != .default, fontDesign != .monospaced {
+                baseFont = applyDesign(fontDesign, to: baseFont)
             }
         } else {
             let defaultSize: CGFloat
@@ -445,7 +517,8 @@ enum PlatformFontResolver {
                 defaultSize = UIFont.labelFontSize
             }
             let weight = weightVal.map { UIFont.Weight(rawValue: $0) } ?? (isBold ? .bold : .regular)
-            baseFont = UIFont.systemFont(ofSize: defaultSize, weight: weight)
+            let standard = UIFont.systemFont(ofSize: defaultSize, weight: weight)
+            baseFont = applyDesign(fontDesign, to: standard)
         }
         
         if isItalic {

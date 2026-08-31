@@ -56,11 +56,19 @@ public enum SelectionMenuPlacement: Sendable, Equatable {
 
 // MARK: - Keyboard Shortcut
 
-/// Represents a cross-platform keyboard shortcut for a selection menu item.
+/// A keyboard shortcut displayed alongside a selection context menu item.
 public struct SelectionKeyboardShortcut: Sendable, Equatable {
+    /// The key equivalent that triggers or is displayed for this action.
     public let key: KeyEquivalent
+    
+    /// The modifier keys required for the shortcut.
     public let modifiers: EventModifiers
     
+    /// Creates a keyboard shortcut with a key equivalent and optional event modifiers.
+    ///
+    /// - Parameters:
+    ///   - key: The key equivalent for the action.
+    ///   - modifiers: The modifier keys required. Defaults to `.command`.
     public init(_ key: KeyEquivalent, modifiers: EventModifiers = .command) {
         self.key = key
         self.modifiers = modifiers
@@ -75,6 +83,7 @@ public struct SelectionKeyboardShortcut: Sendable, Equatable {
 
 /// A type that can be converted into selection context menu items.
 public protocol SelectionMenuItemConvertible: Sendable {
+    /// Produces an array of resolved menu items.
     @MainActor
     func makeParsedMenuItems() -> [ParsedMenuItem]
 }
@@ -110,11 +119,25 @@ internal enum MenuLocalizationHelper {
 
 /// A button menu item in a selection context menu with first-class localization support.
 public struct SelectionButton: SelectionMenuItemConvertible, @unchecked Sendable {
+    /// The displayed title text of the menu button.
     public let title: String
+    
+    /// The SF Symbol name displayed alongside the title, or `nil` if no icon is shown.
     public let systemImage: String?
+    
+    /// The semantic role of the button, such as `.destructive`.
     public let role: ButtonRole?
+    
+    /// A Boolean value indicating whether the button is active and selectable.
     public let isEnabled: Bool
-    public let displayedShortcut: SelectionKeyboardShortcut?
+    
+    /// The optional keyboard shortcut displayed alongside the menu item.
+    ///
+    /// - Important: The shortcut is purely visual. The SelectionButton does
+    ///  not handle  shortcut activation.
+    public let shortcut: SelectionKeyboardShortcut?
+    
+    /// The action executed when the button is selected.
     public let action: @MainActor () -> Void
     
     /// Creates a selection button from a localized string resource.
@@ -125,14 +148,14 @@ public struct SelectionButton: SelectionMenuItemConvertible, @unchecked Sendable
         systemImage: String? = nil,
         role: ButtonRole? = nil,
         isEnabled: Bool = true,
-        displayedShortcut: SelectionKeyboardShortcut? = nil,
+        shortcut: SelectionKeyboardShortcut? = nil,
         action: @escaping @MainActor () -> Void
     ) {
         self.title = MenuLocalizationHelper.resolve(resource)
         self.systemImage = systemImage
         self.role = role
         self.isEnabled = isEnabled
-        self.displayedShortcut = displayedShortcut
+        self.shortcut = shortcut
         self.action = action
     }
     
@@ -145,14 +168,14 @@ public struct SelectionButton: SelectionMenuItemConvertible, @unchecked Sendable
         systemImage: String? = nil,
         role: ButtonRole? = nil,
         isEnabled: Bool = true,
-        displayedShortcut: SelectionKeyboardShortcut? = nil,
+        shortcut: SelectionKeyboardShortcut? = nil,
         action: @escaping @MainActor () -> Void
     ) {
         self.title = MenuLocalizationHelper.resolve(localized: key, table: table, bundle: bundle, locale: locale)
         self.systemImage = systemImage
         self.role = role
         self.isEnabled = isEnabled
-        self.displayedShortcut = displayedShortcut
+        self.shortcut = shortcut
         self.action = action
     }
     
@@ -162,14 +185,14 @@ public struct SelectionButton: SelectionMenuItemConvertible, @unchecked Sendable
         systemImage: String? = nil,
         role: ButtonRole? = nil,
         isEnabled: Bool = true,
-        displayedShortcut: SelectionKeyboardShortcut? = nil,
+        shortcut: SelectionKeyboardShortcut? = nil,
         action: @escaping @MainActor () -> Void
     ) {
         self.title = MenuLocalizationHelper.resolve(titleKey)
         self.systemImage = systemImage
         self.role = role
         self.isEnabled = isEnabled
-        self.displayedShortcut = displayedShortcut
+        self.shortcut = shortcut
         self.action = action
     }
     
@@ -179,39 +202,15 @@ public struct SelectionButton: SelectionMenuItemConvertible, @unchecked Sendable
         systemImage: String? = nil,
         role: ButtonRole? = nil,
         isEnabled: Bool = true,
-        displayedShortcut: SelectionKeyboardShortcut? = nil,
+        shortcut: SelectionKeyboardShortcut? = nil,
         action: @escaping @MainActor () -> Void
     ) {
         self.title = title
         self.systemImage = systemImage
         self.role = role
         self.isEnabled = isEnabled
-        self.displayedShortcut = displayedShortcut
+        self.shortcut = shortcut
         self.action = action
-    }
-    
-    /// Attaches a purely visual keyboard shortcut display to the menu button.
-    public func displayedShortcut(_ key: KeyEquivalent, modifiers: EventModifiers = .command) -> SelectionButton {
-        SelectionButton(
-            verbatim: title,
-            systemImage: systemImage,
-            role: role,
-            isEnabled: isEnabled,
-            displayedShortcut: SelectionKeyboardShortcut(key, modifiers: modifiers),
-            action: action
-        )
-    }
-    
-    /// Attaches a purely visual keyboard shortcut display to the menu button.
-    public func displayedShortcut(_ shortcut: SelectionKeyboardShortcut?) -> SelectionButton {
-        SelectionButton(
-            verbatim: title,
-            systemImage: systemImage,
-            role: role,
-            isEnabled: isEnabled,
-            displayedShortcut: shortcut,
-            action: action
-        )
     }
     
     /// Modifies the enabled state of the menu button.
@@ -221,7 +220,7 @@ public struct SelectionButton: SelectionMenuItemConvertible, @unchecked Sendable
             systemImage: systemImage,
             role: role,
             isEnabled: !disabled,
-            displayedShortcut: displayedShortcut,
+            shortcut: shortcut,
             action: action
         )
     }
@@ -233,7 +232,7 @@ public struct SelectionButton: SelectionMenuItemConvertible, @unchecked Sendable
             systemImage: systemImage,
             role: role,
             isEnabled: isEnabled,
-            displayedShortcut: displayedShortcut,
+            shortcut: shortcut,
             action: action
         )]
     }
@@ -241,8 +240,13 @@ public struct SelectionButton: SelectionMenuItemConvertible, @unchecked Sendable
 
 /// A submenu container in a selection context menu with localization support.
 public struct SelectionMenu: SelectionMenuItemConvertible, @unchecked Sendable {
+    /// The displayed title text of the submenu.
     public let title: String
+    
+    /// The SF Symbol name displayed alongside the title, or `nil` if no icon is shown.
     public let systemImage: String?
+    
+    /// The child menu items contained within this submenu.
     public let items: [any SelectionMenuItemConvertible]
     
     /// Creates a submenu with a localized string resource.
@@ -324,7 +328,7 @@ public struct SelectionMenuItem: SelectionMenuItemConvertible, @unchecked Sendab
         systemImage: String? = nil,
         role: ButtonRole? = nil,
         isEnabled: Bool = true,
-        displayedShortcut: SelectionKeyboardShortcut? = nil,
+        shortcut: SelectionKeyboardShortcut? = nil,
         action: @escaping @MainActor () -> Void
     ) -> SelectionMenuItem {
         SelectionMenuItem(SelectionButton(
@@ -332,7 +336,7 @@ public struct SelectionMenuItem: SelectionMenuItemConvertible, @unchecked Sendab
             systemImage: systemImage,
             role: role,
             isEnabled: isEnabled,
-            displayedShortcut: displayedShortcut,
+            shortcut: shortcut,
             action: action
         ))
     }
@@ -345,7 +349,7 @@ public struct SelectionMenuItem: SelectionMenuItemConvertible, @unchecked Sendab
         systemImage: String? = nil,
         role: ButtonRole? = nil,
         isEnabled: Bool = true,
-        displayedShortcut: SelectionKeyboardShortcut? = nil,
+        shortcut: SelectionKeyboardShortcut? = nil,
         action: @escaping @MainActor () -> Void
     ) -> SelectionMenuItem {
         SelectionMenuItem(SelectionButton(
@@ -356,7 +360,7 @@ public struct SelectionMenuItem: SelectionMenuItemConvertible, @unchecked Sendab
             systemImage: systemImage,
             role: role,
             isEnabled: isEnabled,
-            displayedShortcut: displayedShortcut,
+            shortcut: shortcut,
             action: action
         ))
     }
@@ -366,7 +370,7 @@ public struct SelectionMenuItem: SelectionMenuItemConvertible, @unchecked Sendab
         systemImage: String? = nil,
         role: ButtonRole? = nil,
         isEnabled: Bool = true,
-        displayedShortcut: SelectionKeyboardShortcut? = nil,
+        shortcut: SelectionKeyboardShortcut? = nil,
         action: @escaping @MainActor () -> Void
     ) -> SelectionMenuItem {
         SelectionMenuItem(SelectionButton(
@@ -374,7 +378,7 @@ public struct SelectionMenuItem: SelectionMenuItemConvertible, @unchecked Sendab
             systemImage: systemImage,
             role: role,
             isEnabled: isEnabled,
-            displayedShortcut: displayedShortcut,
+            shortcut: shortcut,
             action: action
         ))
     }
@@ -384,7 +388,7 @@ public struct SelectionMenuItem: SelectionMenuItemConvertible, @unchecked Sendab
         systemImage: String? = nil,
         role: ButtonRole? = nil,
         isEnabled: Bool = true,
-        displayedShortcut: SelectionKeyboardShortcut? = nil,
+        shortcut: SelectionKeyboardShortcut? = nil,
         action: @escaping @MainActor () -> Void
     ) -> SelectionMenuItem {
         SelectionMenuItem(SelectionButton(
@@ -392,7 +396,7 @@ public struct SelectionMenuItem: SelectionMenuItemConvertible, @unchecked Sendab
             systemImage: systemImage,
             role: role,
             isEnabled: isEnabled,
-            displayedShortcut: displayedShortcut,
+            shortcut: shortcut,
             action: action
         ))
     }
@@ -444,16 +448,20 @@ public struct SelectionMenuItem: SelectionMenuItemConvertible, @unchecked Sendab
 
 // MARK: - Internal Parsed Menu Item
 
+/// A resolved selection menu item ready for platform-native rendering in AppKit and UIKit menus.
 public enum ParsedMenuItem: @unchecked Sendable {
+    /// An action item with a title, optional icon, semantic role, enabled state, shortcut, and action closure.
     case action(
         title: String,
         systemImage: String?,
         role: ButtonRole?,
         isEnabled: Bool,
-        displayedShortcut: SelectionKeyboardShortcut?,
+        shortcut: SelectionKeyboardShortcut?,
         action: @MainActor () -> Void
     )
+    /// A visual separator line.
     case separator
+    /// A submenu containing child parsed menu items.
     case submenu(
         title: String,
         systemImage: String?,
@@ -463,6 +471,7 @@ public enum ParsedMenuItem: @unchecked Sendable {
 
 // MARK: - Selection Menu Result Builder
 
+/// A result builder that constructs hierarchical menu item lists for selection context menus.
 @resultBuilder
 public struct SelectionMenuBuilder {
     public static func buildBlock(_ components: [any SelectionMenuItemConvertible]...) -> [any SelectionMenuItemConvertible] {
@@ -492,14 +501,27 @@ public struct SelectionMenuBuilder {
     public static func buildArray(_ components: [[any SelectionMenuItemConvertible]]) -> [any SelectionMenuItemConvertible] {
         components.flatMap { $0 }
     }
+    
+    public static func buildLimitedAvailability(_ component: [any SelectionMenuItemConvertible]) -> [any SelectionMenuItemConvertible] {
+        component
+    }
 }
 
 // MARK: - Selection Context Menu Provider (Environment)
 
+/// A configuration object stored in the environment that supplies custom context menu items for selected text.
 public struct SelectionContextMenuProvider: @unchecked Sendable {
+    /// The placement of custom items relative to default system menu items.
     public let placement: SelectionMenuPlacement
+    
+    /// A closure that generates parsed menu items for the given selection menu context.
     public let builder: @MainActor (SelectionMenuContext) -> [ParsedMenuItem]
     
+    /// Creates a selection context menu provider.
+    ///
+    /// - Parameters:
+    ///   - placement: The placement of custom menu items. Defaults to `.append`.
+    ///   - builder: A closure producing parsed menu items for a given ``SelectionMenuContext``.
     public init(
         placement: SelectionMenuPlacement = .append,
         builder: @escaping @MainActor (SelectionMenuContext) -> [ParsedMenuItem]
@@ -516,27 +538,30 @@ extension EnvironmentValues {
 // MARK: - View Extension
 
 extension View {
-    /// Configures custom context menu items for selected text using dedicated menu types (`SelectionButton`, `SelectionMenu`, `SelectionDivider`).
+    /// Configures custom context menu items for selected text using dedicated menu types (``SelectionButton``, ``SelectionMenu``, ``SelectionDivider``).
     ///
     /// ```swift
     /// SelectionContainer {
     ///     ArticleContentView()
     /// }
     /// .selectionContextMenu(placement: .append) { context in
-    ///     SelectionButton("Highlight Selection", systemImage: "highlighter") {
+    ///     SelectionButton(
+    ///         "Highlight Selection",
+    ///         systemImage: "highlighter",
+    ///         shortcut: SelectionKeyboardShortcut("h", modifiers: [.command, .shift])
+    ///     ) {
     ///         print("Highlighting: \(context.selectedText)")
     ///     }
-    ///     .keyboardShortcut("h", modifiers: [.command, .shift])
     ///
     ///     SelectionButton("Quote in Reply", systemImage: "quote.opening") {
-    ///         replyComposer.insert(context.selectedText)
+    ///        // Action here
     ///     }
     ///
     ///     SelectionDivider()
     ///
     ///     SelectionMenu("Share Selection", systemImage: "square.and.arrow.up") {
-    ///         SelectionButton("To Notes", systemImage: "note.text") { ... }
-    ///         SelectionButton("To Messages", systemImage: "message") { ... }
+    ///         SelectionButton("To Notes", systemImage: "note.text") {  }
+    ///         SelectionButton("To Messages", systemImage: "message") {  }
     ///     }
     /// }
     /// ```

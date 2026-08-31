@@ -35,14 +35,17 @@ struct SelectionContextMenuTests {
         #expect(activeContext.selectedIDs == [AnyHashable("para-1"), AnyHashable(42)])
     }
     
-    @Test("SelectionButton creates typed action and executes closure with visual displayedShortcut")
+    @Test("SelectionButton creates typed action and executes closure with shortcut")
     @MainActor
     func testSelectionButton() {
         var actionExecuted = false
-        let button = SelectionButton("Highlight", systemImage: "highlighter") {
+        let button = SelectionButton(
+            "Highlight",
+            systemImage: "highlighter",
+            shortcut: SelectionKeyboardShortcut("h", modifiers: [.command, .shift])
+        ) {
             actionExecuted = true
         }
-        .displayedShortcut("h", modifiers: [.command, .shift])
         
         let items = button.makeParsedMenuItems()
         #expect(items.count == 1)
@@ -58,24 +61,25 @@ struct SelectionContextMenuTests {
         #expect(isEnabled)
         #expect(shortcut?.key == "h")
         #expect(shortcut == SelectionKeyboardShortcut("h", modifiers: [.command, .shift]))
+        #expect(button.shortcut == SelectionKeyboardShortcut("h", modifiers: [.command, .shift]))
         
         action()
         #expect(actionExecuted)
     }
     
-    @Test("SelectionButton displayedShortcut modifier overloads")
+    @Test("SelectionButton shortcut init property overloads")
     @MainActor
-    func testSelectionButtonDisplayedShortcutOverloads() {
-        let btn1 = SelectionButton("Action 1") {}.displayedShortcut("k")
-        #expect(btn1.displayedShortcut?.key == KeyEquivalent("k"))
-        #expect(btn1.displayedShortcut?.modifiers == EventModifiers.command)
+    func testSelectionButtonShortcutInitOverloads() {
+        let btn1 = SelectionButton("Action 1", shortcut: SelectionKeyboardShortcut("k")) {}
+        #expect(btn1.shortcut?.key == KeyEquivalent("k"))
+        #expect(btn1.shortcut?.modifiers == EventModifiers.command)
         
-        let btn2 = SelectionButton("Action 2") {}.displayedShortcut(KeyEquivalent("f"), modifiers: [.command, .option])
-        #expect(btn2.displayedShortcut?.key == KeyEquivalent("f"))
-        #expect(btn2.displayedShortcut?.modifiers == [.command, .option])
+        let btn2 = SelectionButton("Action 2", shortcut: SelectionKeyboardShortcut("f", modifiers: [.command, .option])) {}
+        #expect(btn2.shortcut?.key == KeyEquivalent("f"))
+        #expect(btn2.shortcut?.modifiers == [.command, .option])
         
-        let btn3 = SelectionButton("Action 3", displayedShortcut: SelectionKeyboardShortcut("z", modifiers: .command)) {}
-        #expect(btn3.displayedShortcut?.key == KeyEquivalent("z"))
+        let btn3 = SelectionButton(verbatim: "Action 3", shortcut: SelectionKeyboardShortcut("z", modifiers: .command)) {}
+        #expect(btn3.shortcut?.key == KeyEquivalent("z"))
     }
     
     @Test("SelectionButton handles destructive role and disabled state")
@@ -177,6 +181,44 @@ struct SelectionContextMenuTests {
         let withoutSpecial = makeItems(includeSpecial: false, options: ["Opt1"])
         let parsedWithout = withoutSpecial.flatMap { $0.makeParsedMenuItems() }
         #expect(parsedWithout.count == 3)
+    }
+    
+    @Test("SelectionMenuBuilder buildLimitedAvailability direct call and result builder branches")
+    @MainActor
+    func testSelectionMenuBuilderAvailabilityChecks() {
+        // Direct call verification
+        let sampleItems: [any SelectionMenuItemConvertible] = [
+            SelectionButton("Direct Item 1") {},
+            SelectionButton("Direct Item 2") {}
+        ]
+        let limited = SelectionMenuBuilder.buildLimitedAvailability(sampleItems)
+        #expect(limited.count == 2)
+        
+        // Result builder with #available branch
+        @SelectionMenuBuilder
+        func makeMenuWithAvailability() -> [any SelectionMenuItemConvertible] {
+            SelectionButton("Base Action") {}
+            if #available(macOS 15.0, iOS 18.0, visionOS 2.0, *) {
+                SelectionButton("New OS Feature", systemImage: "sparkles") {}
+            } else {
+                SelectionButton("Fallback Feature", systemImage: "arrow.backward") {}
+            }
+        }
+        
+        let items = makeMenuWithAvailability()
+        let parsed = items.flatMap { $0.makeParsedMenuItems() }
+        #expect(parsed.count == 2)
+        guard case .action(let baseTitle, _, _, _, _, _) = parsed[0] else {
+            Issue.record("Expected .action item for base")
+            return
+        }
+        #expect(baseTitle == "Base Action")
+        
+        guard case .action(let featureTitle, _, _, _, _, _) = parsed[1] else {
+            Issue.record("Expected .action item for availability branch")
+            return
+        }
+        #expect(featureTitle == "New OS Feature" || featureTitle == "Fallback Feature")
     }
     
     @Test("SelectionButton and SelectionMenu support LocalizedStringKey and LocalizationValue")

@@ -29,7 +29,7 @@ struct TextElementRegistration: Identifiable, Equatable, @unchecked Sendable {
         attributedString: AttributedString? = nil,
         frame: CGRect,
         font: PlatformFont,
-        orderIndex: Int,
+        orderIndex: Int = 0,
         delimiter: String = "\n",
         alignment: TextAlignment = .leading,
         lineSpacing: CGFloat = 0,
@@ -107,14 +107,24 @@ struct LineLayout {
     let line: CTLine
     let origin: CGPoint
     let range: CFRange
+    let visibleRanges: [Range<Int>]
     let ascent: CGFloat
     let descent: CGFloat
     let leading: CGFloat
     let top: CGFloat
     let bottom: CGFloat
+    let isTruncated: Bool
     
     var height: CGFloat { bottom - top }
     var centerY: CGFloat { (top + bottom) / 2 }
+    
+    var minVisibleOffset: Int {
+        visibleRanges.first?.lowerBound ?? range.location
+    }
+    
+    var maxVisibleOffset: Int {
+        visibleRanges.last?.upperBound ?? (range.location + range.length)
+    }
 }
 
 final class CachedElementLayout {
@@ -156,36 +166,21 @@ final class CachedElementLayout {
         
         let mutableAttrString = NSMutableAttributedString(attributedString: baseAttrString)
         
-        var ctAlignment: CTTextAlignment
+        let paragraphStyle = NSMutableParagraphStyle()
         switch element.alignment {
         case .leading:
-            ctAlignment = (element.layoutDirection == .rightToLeft) ? .right : .left
+            paragraphStyle.alignment = (element.layoutDirection == .rightToLeft) ? .right : .left
         case .center:
-            ctAlignment = .center
+            paragraphStyle.alignment = .center
         case .trailing:
-            ctAlignment = (element.layoutDirection == .rightToLeft) ? .left : .right
+            paragraphStyle.alignment = (element.layoutDirection == .rightToLeft) ? .left : .right
         }
+        paragraphStyle.baseWritingDirection = (element.layoutDirection == .rightToLeft) ? .rightToLeft : .natural
+        paragraphStyle.lineSpacing = CGFloat(element.lineSpacing)
+        paragraphStyle.lineBreakMode = .byWordWrapping
         
-        var baseWritingDir: CTWritingDirection = (element.layoutDirection == .rightToLeft) ? .rightToLeft : .natural
-        var spacing = CGFloat(element.lineSpacing)
-        var lineBreakMode = CTLineBreakMode.byWordWrapping
-        let paragraphStyle: CTParagraphStyle = withUnsafePointer(to: &ctAlignment) { alignPtr in
-            withUnsafePointer(to: &spacing) { spacingPtr in
-                withUnsafePointer(to: &lineBreakMode) { breakPtr in
-                    withUnsafePointer(to: &baseWritingDir) { dirPtr in
-                        let settings: [CTParagraphStyleSetting] = [
-                            CTParagraphStyleSetting(spec: .alignment, valueSize: MemoryLayout<CTTextAlignment>.size, value: alignPtr),
-                            CTParagraphStyleSetting(spec: .lineSpacingAdjustment, valueSize: MemoryLayout<CGFloat>.size, value: spacingPtr),
-                            CTParagraphStyleSetting(spec: .lineBreakMode, valueSize: MemoryLayout<CTLineBreakMode>.size, value: breakPtr),
-                            CTParagraphStyleSetting(spec: .baseWritingDirection, valueSize: MemoryLayout<CTWritingDirection>.size, value: dirPtr)
-                        ]
-                        return CTParagraphStyleCreate(settings, settings.count)
-                    }
-                }
-            }
-        }
         mutableAttrString.addAttribute(
-            NSAttributedString.Key(kCTParagraphStyleAttributeName as String),
+            .paragraphStyle,
             value: paragraphStyle,
             range: NSRange(location: 0, length: mutableAttrString.length)
         )
@@ -208,6 +203,7 @@ final class CachedElementLayout {
         
         // Apply line truncation token on the last line if lines exceeded lineLimit
         var ctLines = rawLines
+        var truncatedFlags = [Bool](repeating: false, count: ctLines.count)
         if (element.lineLimit != nil && allLines.count > rawLines.count) || (element.lineLimit == 1) {
             if let lastIndex = ctLines.indices.last {
                 let lastLine = ctLines[lastIndex]
@@ -228,6 +224,7 @@ final class CachedElementLayout {
                     let token = CTLineCreateWithAttributedString(ellipsisAttr as CFAttributedString)
                     if let truncated = CTLineCreateTruncatedLine(lastLine, Double(width), truncationType, token) {
                         ctLines[lastIndex] = truncated
+                        truncatedFlags[lastIndex] = true
                     }
                 }
             }
@@ -258,16 +255,46 @@ final class CachedElementLayout {
             let range = CTLineGetStringRange(line)
             let lineTop = CGFloat(i) * linePitch
             let lineBottom = lineTop + linePitch
+            let isTruncated = truncatedFlags[i]
+            
+            var visibleRanges: [Range<Int>] = []
+            let runs = (CTLineGetGlyphRuns(line) as? [CTRun]) ?? []
+            let lineStart = range.location
+            let lineEnd = lineStart + range.length
+            
+            if isTruncated && !runs.isEmpty {
+                var lastUpper = lineStart
+                for run in runs {
+                    let rRange = CTRunGetStringRange(run)
+                    let rStart = rRange.location
+                    let rEnd = rStart + rRange.length
+                    
+                    if rStart >= lineStart && rEnd <= lineEnd && rStart >= lastUpper && rStart < rEnd {
+                        visibleRanges.append(rStart..<rEnd)
+                        lastUpper = rEnd
+                    }
+                }
+            }
+            
+            if visibleRanges.isEmpty {
+                if lineStart < lineEnd {
+                    visibleRanges = [lineStart..<lineEnd]
+                } else {
+                    visibleRanges = [lineStart..<lineStart]
+                }
+            }
             
             lineLayouts.append(LineLayout(
                 line: line,
                 origin: origins[i],
                 range: range,
+                visibleRanges: visibleRanges,
                 ascent: asc,
                 descent: desc,
                 leading: lead,
                 top: lineTop,
-                bottom: lineBottom
+                bottom: lineBottom,
+                isTruncated: isTruncated
             ))
         }
         
@@ -549,15 +576,18 @@ struct VirtualTextDocument {
             }
         }
         
-        // 2. Bound checks
-        if let first = slices.first, point.y < first.element.frame.minY {
+        // 2. Global Document Bound checks
+        let docMinY = slices.reduce(CGFloat.greatestFiniteMagnitude) { min($0, $1.element.frame.minY) }
+        let docMaxY = slices.reduce(-CGFloat.greatestFiniteMagnitude) { max($0, $1.element.frame.maxY) }
+        
+        if point.y < docMinY {
             return 0
         }
-        if let last = slices.last, point.y > last.element.frame.maxY {
+        if point.y > docMaxY {
             return totalLength
         }
         
-        // 3. Nearest 2D distance check (strongly prioritize elements containing point.y on the same line)
+        // 3. Nearest 2D distance check across all slices (strongly prioritize elements containing point.y on the same line)
         var bestSlice = slices[0]
         var minDistance = CGFloat.greatestFiniteMagnitude
         
@@ -565,10 +595,6 @@ struct VirtualTextDocument {
             let dy: CGFloat
             if point.y < s.element.frame.minY {
                 dy = s.element.frame.minY - point.y
-                if (dy * dy * 100) >= minDistance {
-                    // Since slices are Y-sorted, subsequent slices are even further vertically
-                    break
-                }
             } else if point.y > s.element.frame.maxY {
                 dy = point.y - s.element.frame.maxY
             } else {
@@ -678,18 +704,38 @@ struct VirtualTextDocument {
         
         let relativeX = localPoint.x - bestLine.origin.x
         let charIndex = CTLineGetStringIndexForPosition(bestLine.line, CGPoint(x: relativeX, y: 0))
+        let lineWidth = CGFloat(CTLineGetTypographicBounds(bestLine.line, nil, nil, nil))
+        let isRTL = element.layoutDirection == .rightToLeft
         
         if charIndex == kCFNotFound {
-            let lineWidth = CGFloat(CTLineGetTypographicBounds(bestLine.line, nil, nil, nil))
-            let isRTL = element.layoutDirection == .rightToLeft
             if isRTL {
-                return relativeX > lineWidth ? bestLine.range.location : (bestLine.range.location + bestLine.range.length)
+                return relativeX > lineWidth ? bestLine.minVisibleOffset : bestLine.maxVisibleOffset
             } else {
-                return relativeX < 0 ? bestLine.range.location : (bestLine.range.location + bestLine.range.length)
+                return relativeX < 0 ? bestLine.minVisibleOffset : bestLine.maxVisibleOffset
             }
         }
         
-        return min(max(0, charIndex), utf16Count)
+        var resolvedIndex = charIndex
+        if bestLine.isTruncated {
+            if resolvedIndex < bestLine.minVisibleOffset {
+                if isRTL {
+                    resolvedIndex = relativeX < 0 ? bestLine.maxVisibleOffset : bestLine.minVisibleOffset
+                } else {
+                    resolvedIndex = relativeX > (lineWidth / 2) ? bestLine.maxVisibleOffset : bestLine.minVisibleOffset
+                }
+            } else if resolvedIndex > bestLine.maxVisibleOffset {
+                resolvedIndex = bestLine.maxVisibleOffset
+            } else if bestLine.visibleRanges.count > 1 {
+                let inRange = bestLine.visibleRanges.contains { $0.contains(resolvedIndex) || resolvedIndex == $0.upperBound }
+                if !inRange {
+                    let prefixEnd = bestLine.visibleRanges[0].upperBound
+                    let suffixStart = bestLine.visibleRanges[1].lowerBound
+                    resolvedIndex = (abs(resolvedIndex - prefixEnd) <= abs(resolvedIndex - suffixStart)) ? prefixEnd : suffixStart
+                }
+            }
+        }
+        
+        return min(max(0, resolvedIndex), utf16Count)
     }
     
     private func computeLocalCaretRect(for element: TextElementRegistration, charIndex: Int) -> CGRect {
@@ -701,14 +747,40 @@ struct VirtualTextDocument {
         let clampedIndex = max(0, min(charIndex, utf16Count))
         
         for (i, line) in layout.lines.enumerated() {
+            let isLastLine = (i == layout.lines.count - 1)
             let lineStart = line.range.location
             let lineEnd = lineStart + line.range.length
             
-            if (clampedIndex >= lineStart && clampedIndex <= lineEnd) || (i == layout.lines.count - 1 && clampedIndex >= lineEnd) {
-                let charOffsetInLine = min(clampedIndex, lineEnd)
+            if (clampedIndex >= lineStart && clampedIndex <= lineEnd) || (isLastLine && clampedIndex >= lineEnd) {
+                var targetOffset = clampedIndex
+                
+                if line.isTruncated {
+                    if isLastLine && clampedIndex >= lineEnd {
+                        targetOffset = line.maxVisibleOffset
+                    } else if clampedIndex > line.maxVisibleOffset {
+                        targetOffset = line.maxVisibleOffset
+                    } else if clampedIndex < line.minVisibleOffset {
+                        targetOffset = line.minVisibleOffset
+                    } else if line.visibleRanges.count > 1 {
+                        let inVisibleRange = line.visibleRanges.contains { $0.contains(clampedIndex) || clampedIndex == $0.upperBound }
+                        if !inVisibleRange {
+                            let prefixEnd = line.visibleRanges[0].upperBound
+                            let suffixStart = line.visibleRanges[1].lowerBound
+                            targetOffset = (abs(clampedIndex - prefixEnd) <= abs(clampedIndex - suffixStart)) ? prefixEnd : suffixStart
+                        }
+                    }
+                }
+                
                 var secondaryOffset: CGFloat = 0
-                let xOffset = CTLineGetOffsetForStringIndex(line.line, charOffsetInLine, &secondaryOffset)
-                let finalX = line.origin.x + xOffset
+                let xOffset = CTLineGetOffsetForStringIndex(line.line, targetOffset, &secondaryOffset)
+                var finalX = line.origin.x + xOffset
+                
+                // Fallback safety if xOffset returned 0 for non-zero targetOffset on truncated LTR line
+                if line.isTruncated && element.layoutDirection != .rightToLeft && finalX <= line.origin.x && targetOffset > line.minVisibleOffset {
+                    let lineWidth = CGFloat(CTLineGetTypographicBounds(line.line, nil, nil, nil))
+                    finalX = line.origin.x + max(0, lineWidth)
+                }
+                
                 return CGRect(x: max(0, finalX), y: line.top, width: 2, height: line.height)
             }
         }
@@ -725,17 +797,19 @@ struct VirtualTextDocument {
         let clampedIndex = max(0, min(charIndex, max(0, utf16Count - 1)))
         
         for line in layout.lines {
-            let lineStart = line.range.location
-            let lineEnd = lineStart + line.range.length
-            if clampedIndex >= lineStart && clampedIndex < lineEnd {
+            let isVisibleOnLine = line.visibleRanges.contains { $0.contains(clampedIndex) }
+            if isVisibleOnLine {
                 let startX = line.origin.x + CTLineGetOffsetForStringIndex(line.line, clampedIndex, nil)
                 let endX = line.origin.x + CTLineGetOffsetForStringIndex(line.line, clampedIndex + 1, nil)
-                return CGRect(
-                    x: min(startX, endX),
-                    y: line.top,
-                    width: max(4, abs(endX - startX)),
-                    height: line.height
-                )
+                let width = abs(endX - startX)
+                if width > 0.5 {
+                    return CGRect(
+                        x: min(startX, endX),
+                        y: line.top,
+                        width: max(4, width),
+                        height: line.height
+                    )
+                }
             }
         }
         
@@ -747,44 +821,59 @@ struct VirtualTextDocument {
         guard let layout = layoutCache[element.id], !layout.lines.isEmpty else { return [] }
         var rects: [CGRect] = []
         
-        for line in layout.lines {
+        for (i, line) in layout.lines.enumerated() {
+            let isLastLine = (i == layout.lines.count - 1)
             let lineStart = line.range.location
             let lineEnd = lineStart + line.range.length
+            let effectiveLineEnd = (isLastLine && element.text.utf16.count > lineEnd) ? element.text.utf16.count : lineEnd
+            
             let overlapStart = max(range.lowerBound, lineStart)
-            let overlapEnd = min(range.upperBound, lineEnd)
+            let overlapEnd = min(range.upperBound, effectiveLineEnd)
             
             guard overlapStart < overlapEnd else { continue }
             
             // Enumerate individual CTRun segments in the line for accurate Bidirectional / RTL highlights
             let runs = (CTLineGetGlyphRuns(line.line) as? [CTRun]) ?? []
-            if runs.isEmpty {
-                let startX = line.origin.x + CTLineGetOffsetForStringIndex(line.line, overlapStart, nil)
-                let endX = line.origin.x + CTLineGetOffsetForStringIndex(line.line, overlapEnd, nil)
-                rects.append(CGRect(
-                    x: min(startX, endX),
-                    y: line.top,
-                    width: max(2, abs(endX - startX)),
-                    height: line.height
-                ))
-            } else {
-                for run in runs {
-                    let runRange = CTRunGetStringRange(run)
-                    let runStart = runRange.location
-                    let runEnd = runStart + runRange.length
-                    
-                    let runOverlapStart = max(overlapStart, runStart)
-                    let runOverlapEnd = min(overlapEnd, runEnd)
-                    
-                    if runOverlapStart < runOverlapEnd {
-                        let startX = line.origin.x + CTLineGetOffsetForStringIndex(line.line, runOverlapStart, nil)
-                        let endX = line.origin.x + CTLineGetOffsetForStringIndex(line.line, runOverlapEnd, nil)
-                        rects.append(CGRect(
-                            x: min(startX, endX),
-                            y: line.top,
-                            width: max(2, abs(endX - startX)),
-                            height: line.height
-                        ))
-                    }
+            var matchedRun = false
+            
+            for run in runs {
+                let runRange = CTRunGetStringRange(run)
+                let runStart = runRange.location
+                let runEnd = runStart + runRange.length
+                
+                // Filter out truncation token runs that have independent string ranges outside line range
+                guard runStart >= lineStart && runEnd <= lineEnd && runStart < runEnd else {
+                    continue
+                }
+                
+                let runOverlapStart = max(overlapStart, runStart)
+                let runOverlapEnd = min(overlapEnd, runEnd)
+                
+                if runOverlapStart < runOverlapEnd {
+                    matchedRun = true
+                    let startX = line.origin.x + CTLineGetOffsetForStringIndex(line.line, runOverlapStart, nil)
+                    let endX = line.origin.x + CTLineGetOffsetForStringIndex(line.line, runOverlapEnd, nil)
+                    rects.append(CGRect(
+                        x: min(startX, endX),
+                        y: line.top,
+                        width: max(2, abs(endX - startX)),
+                        height: line.height
+                    ))
+                }
+            }
+            
+            if !matchedRun {
+                let clampedOverlapStart = max(overlapStart, line.minVisibleOffset)
+                let clampedOverlapEnd = min(overlapEnd, line.maxVisibleOffset)
+                if clampedOverlapStart < clampedOverlapEnd {
+                    let startX = line.origin.x + CTLineGetOffsetForStringIndex(line.line, clampedOverlapStart, nil)
+                    let endX = line.origin.x + CTLineGetOffsetForStringIndex(line.line, clampedOverlapEnd, nil)
+                    rects.append(CGRect(
+                        x: min(startX, endX),
+                        y: line.top,
+                        width: max(2, abs(endX - startX)),
+                        height: line.height
+                    ))
                 }
             }
         }

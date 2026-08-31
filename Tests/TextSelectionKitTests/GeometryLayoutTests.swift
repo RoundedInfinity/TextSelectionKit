@@ -240,4 +240,122 @@ struct GeometryLayoutTests {
         #expect(offset == heading.text.utf16.count)
         #expect(doc.text(in: 0..<offset) == "Heading")
     }
+    
+    // MARK: - Truncation & lineLimit Tests
+    
+    @Test("Single-line truncated text clamps caret rect and hit-testing within visible frame bounds")
+    func testSingleLineTruncationBoundsProtection() {
+        let longText = "The quick brown fox jumps over the lazy dog and runs across the wide green field."
+        #if os(macOS)
+        let font = NSFont.systemFont(ofSize: 14)
+        #else
+        let font = UIFont.systemFont(ofSize: 14)
+        #endif
+        
+        let elem = TextElementRegistration(
+            id: UUID(),
+            text: longText,
+            frame: CGRect(x: 10, y: 10, width: 120, height: 25),
+            font: font,
+            lineLimit: 1,
+            truncationMode: .tail
+        )
+        let doc = VirtualTextDocument(elements: [elem])
+        
+        // 1. Caret at start (offset 0)
+        let startCaret = doc.caretRect(atGlobalOffset: 0)
+        #expect(startCaret.minX >= 10)
+        #expect(startCaret.minX <= 20)
+        
+        // 2. Caret at end (offset = longText.utf16.count) must not collapse to 0, should be positioned at visible line end
+        let endCaret = doc.caretRect(atGlobalOffset: longText.utf16.count)
+        #expect(endCaret.minX > startCaret.minX)
+        #expect(endCaret.maxX <= elem.frame.maxX + 10)
+        
+        // 3. Hit-test far to the right (x: 300, y: 20) should clamp to valid visible offset on the line
+        let rightOffset = doc.closestGlobalOffset(to: CGPoint(x: 300, y: 20))
+        #expect(rightOffset > 0)
+        #expect(rightOffset <= longText.utf16.count)
+        
+        // 4. Line selection rects for the whole text must not have disjoint 0-width or overlapping artifacts
+        let rects = doc.lineSelectionRects(for: 0..<longText.utf16.count)
+        #expect(rects.count == 1)
+        #expect(rects[0].minX >= 10)
+        #expect(rects[0].maxX <= elem.frame.maxX + 10)
+    }
+    
+    @Test("Multi-line text with lineLimit produces capped line count and safe caret rects")
+    func testMultiLineLimitTruncationBoundsProtection() {
+        let longText = "The quick brown fox jumps over the lazy dog and runs across the wide green field and into the deep dark woods on a sunny afternoon."
+        #if os(macOS)
+        let font = NSFont.systemFont(ofSize: 14)
+        #else
+        let font = UIFont.systemFont(ofSize: 14)
+        #endif
+        
+        let elem = TextElementRegistration(
+            id: UUID(),
+            text: longText,
+            frame: CGRect(x: 0, y: 0, width: 120, height: 50),
+            font: font,
+            lineLimit: 2,
+            truncationMode: .tail
+        )
+        let doc = VirtualTextDocument(elements: [elem])
+        
+        // Selection rects for all text should produce exactly 2 line rects (capped by lineLimit = 2)
+        let rects = doc.lineSelectionRects(for: 0..<longText.utf16.count)
+        #expect(rects.count == 2)
+        #expect(rects[1].minY > rects[0].minY)
+        #expect(rects[0].maxX <= elem.frame.maxX + 10)
+        #expect(rects[1].maxX <= elem.frame.maxX + 10)
+        
+        // Caret rect at end of string must be on line 2 (not line 1) and have positive width & height
+        let endCaret = doc.caretRect(atGlobalOffset: longText.utf16.count)
+        #expect(endCaret.minY >= rects[1].minY - 2)
+        #expect(endCaret.minX > 0)
+        #expect(endCaret.maxX <= elem.frame.maxX + 10)
+        
+        // Character rect at end of string must be on line 2
+        let endCharRect = doc.characterRect(atGlobalOffset: longText.utf16.count - 1)
+        #expect(endCharRect.minY >= rects[1].minY - 2)
+        #expect(endCharRect.minX > 0)
+        #expect(endCharRect.maxX <= elem.frame.maxX + 10)
+    }
+    
+    @Test("Truncation modes (.head, .middle, .tail) handle character index and caret safely")
+    func testVariousTruncationModesSafeHitTesting() {
+        let text = "https://example.com/very/deep/nested/path/to/a/resource/that/is/extremely/long/and/detailed"
+        #if os(macOS)
+        let font = NSFont.systemFont(ofSize: 14)
+        #else
+        let font = UIFont.systemFont(ofSize: 14)
+        #endif
+        
+        for mode in [Text.TruncationMode.head, Text.TruncationMode.middle, Text.TruncationMode.tail] {
+            let elem = TextElementRegistration(
+                id: UUID(),
+                text: text,
+                frame: CGRect(x: 0, y: 0, width: 150, height: 25),
+                font: font,
+                lineLimit: 1,
+                truncationMode: mode
+            )
+            let doc = VirtualTextDocument(elements: [elem])
+            
+            let caret0 = doc.caretRect(atGlobalOffset: 0)
+            let caretEnd = doc.caretRect(atGlobalOffset: text.utf16.count)
+            #expect(caret0.width == 2)
+            #expect(caretEnd.width == 2)
+            #expect(caretEnd.minX >= 0)
+            
+            let hitRight = doc.closestGlobalOffset(to: CGPoint(x: 200, y: 10))
+            #expect(hitRight >= 0 && hitRight <= text.utf16.count)
+            
+            let rects = doc.lineSelectionRects(for: 0..<text.utf16.count)
+            #expect(rects.count == 1)
+            #expect(rects[0].width > 0)
+            #expect(rects[0].maxX <= 170)
+        }
+    }
 }

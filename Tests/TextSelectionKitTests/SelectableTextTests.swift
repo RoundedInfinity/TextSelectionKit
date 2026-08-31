@@ -36,20 +36,25 @@ struct SelectableTextTests {
             .tracking(2.0)
             .kerning(1.0)
             .baselineOffset(3.0)
-            .foregroundStyle(.green)
             .foregroundColor(.yellow)
+            .font(.title)
         
         #expect(text.rawText == "Base Text")
+        #expect(text.attributedText.runs.first?.font == .title)
     }
     
-    @Test("Concatenation operator (+) creates compound SelectableText")
+    @Test("Concatenation operator (+) creates compound SelectableText with distinct fonts")
     @MainActor
     func testConcatenationOperator() {
-        let part1 = SelectableText("First Part ").bold()
-        let part2 = SelectableText("Second Part").italic()
+        let part1 = SelectableText("First Part ").bold().font(.headline)
+        let part2 = SelectableText("Second Part").italic().font(.subheadline)
         let combined = part1 + part2
         
         #expect(combined.rawText == "First Part Second Part")
+        let runs = Array(combined.attributedText.runs)
+        #expect(runs.count == 2)
+        #expect(runs[0].font == .headline)
+        #expect(runs[1].font == .subheadline)
     }
     
     @Test("LocalizedStringKey and LocalizationValue resolution")
@@ -143,21 +148,6 @@ struct SelectableTextTests {
             }
         }
         _ = container
-    }
-    
-    @Test("disabledSelection modifier alias disables selection on child views")
-    @MainActor
-    func testDisabledSelectionAlias() {
-        let text = SelectableText("Disabled Text")
-            .disabledSelection()
-        _ = text
-        
-        let hierarchy = VStack {
-            SelectableText("Item 1")
-            SelectableText("Item 2")
-        }
-        .disabledSelection(true)
-        _ = hierarchy
     }
     
     @Test("selectionDelimiter modifier sets delimiter for child views")

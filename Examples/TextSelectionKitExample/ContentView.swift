@@ -3,6 +3,7 @@ import TextSelectionKit
 
 public enum ExampleTab: String, CaseIterable, Identifiable {
     case showcase = "Showcase"
+    case fontModifiers = "Font Modifiers"
     case complexLayout = "Complex & RTL"
     case longDocument = "Long Document"
 
@@ -31,6 +32,8 @@ public struct ContentView: View {
             switch selectedTab {
             case .showcase:
                 FeatureShowcaseView()
+            case .fontModifiers:
+                FontModifiersExampleView()
             case .complexLayout:
                 ComplexLayoutRTLExampleView()
             case .longDocument:
@@ -107,9 +110,7 @@ public struct FeatureShowcaseView: View {
                     .disabled(!firstContainerManager.hasSelection)
                     
                     Button {
-                        firstContainerManager.clearSelection()
-
-
+                        firstContainerManager.deselectAll()
                     } label: {
                         Label("Clear", systemImage: "xmark.circle")
                     }
@@ -120,7 +121,7 @@ public struct FeatureShowcaseView: View {
                     
                     if firstContainerManager.hasSelection {
                         VStack(alignment: .trailing, spacing: 2) {
-                            Text("\(firstContainerManager.getSelectedText().count) chars selected")
+                            Text("\(firstContainerManager.selectedText.count) chars selected")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             let ids = firstContainerManager.selectedIDs(String.self)
@@ -187,10 +188,13 @@ public struct FeatureShowcaseView: View {
                     .background(Color.gray.opacity(0.08), in: .rect(cornerRadius: 12))
                 }
                 .selectionContextMenu(placement: .append) { context in
-                    SelectionButton("Highlight Selection", systemImage: "highlighter") {
+                    SelectionButton(
+                        "Highlight Selection",
+                        systemImage: "highlighter",
+                        shortcut: SelectionKeyboardShortcut("h", modifiers: [.command, .shift])
+                    ) {
                         print("Highlighted: \(context.selectedText)")
                     }
-                    .displayedShortcut("h", modifiers: [.command, .shift])
 
                     SelectionButton("Quote in Reply", systemImage: "quote.opening") {
                         print("Quoting: \(context.selectedText)")
@@ -285,38 +289,51 @@ public struct FeatureShowcaseView: View {
 }
 
 #Preview("Container hitTestPolicy") {
-    SelectionContainer(hitTestPolicy: .container) {
-        VStack(alignment: .leading) {
-            SelectableText("Hello world")
-                .font(.title)
+    NavigationStack {
+        ScrollView {
 
-            SelectableText("This is a selectable text")
+            SelectionContainer {
+                VStack(alignment: .leading) {
+                    SelectableText("This is my **text**",id: "heading")
+                        .font(.title)
 
-            Divider()
-            
+                    SelectableText("This is another text.")
+                        .font(.subheadline)
 
-            SelectableText("This is another selectable text")
+                    Button("Start listening", systemImage: "play") {
 
-            VStack {
-                SelectableText("These texts are not selectable")
-                SelectableText("They are not!")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.vertical,4)
+
+                    SelectableText("This is the body content of this scroll view that is a long text that you need to read and it actually is so long it wraps around.")
+
+                    Divider()
+
+                    SelectableText("This is the body content of this scroll view that is a long text that you need to read and it actually is so long it wraps around.")
+                }
+                .padding()
             }
-            .selectableTextDisabled()
+            .selectionContextMenu(placement: .append) { context in
+                SelectionButton(
+                    "Highlight Selection",
+                    systemImage: "highlighter",
+                    shortcut: SelectionKeyboardShortcut("h", modifiers: [.command, .shift])
+                ) {
+                    print("Highlighting: \(context.selectedText)")
+                }
 
-            HStack {
-                SelectableText("Swift")
-                SelectableText("SwiftUI")
-                SelectableText("CoreText")
+
+                SelectionButton("Quote in Reply", systemImage: "quote.opening") {
+                }
+
+
+                SelectionDivider()
+
+
             }
-            .selectionDelimiter(", ")
-      
+
+
         }
-        .padding(32)
-
-
-
     }
-    .keyboardShortcut("a",)
-    .background(.blue.opacity(0.1))
-    .padding()
 }

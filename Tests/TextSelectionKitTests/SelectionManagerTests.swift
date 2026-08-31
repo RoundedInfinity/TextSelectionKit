@@ -36,7 +36,8 @@ struct SelectionManagerTests {
         #expect(!manager.isSelecting)
         #expect(manager.globalSelectedRange == 0..<0)
         #expect(manager.selections.isEmpty)
-        #expect(manager.getSelectedText() == "")
+        #expect(manager.selectedText == "")
+        #expect(String(manager.selectedAttributedString.characters) == "")
     }
     
     @Test("Selection lifecycle: set, selectAll, and clear")
@@ -49,28 +50,36 @@ struct SelectionManagerTests {
         manager.updateRegisteredElements([elem1, elem2])
         
         // 1. Partial Selection
-        manager.setGlobalSelection(0..<5)
+        manager.select(0..<5)
         #expect(manager.hasSelection)
         #expect(manager.isSelecting)
         #expect(manager.globalSelectedRange == 0..<5)
-        #expect(manager.getSelectedText() == "Hello")
+        #expect(manager.selectedText == "Hello")
+        #expect(String(manager.selectedAttributedString.characters) == "Hello")
         
         // 2. Select All
         manager.selectAll()
         #expect(manager.hasSelection)
         #expect(manager.globalSelectedRange == 0..<11)
-        #expect(manager.getSelectedText() == "Hello\nWorld")
+        #expect(manager.selectedText == "Hello\nWorld")
+        #expect(String(manager.selectedAttributedString.characters) == "Hello\nWorld")
         
-        // 3. Clear Selection
-        manager.clearSelection()
+        // 3. Deselect All
+        manager.deselectAll()
         #expect(!manager.hasSelection)
         #expect(!manager.isSelecting)
         #expect(manager.globalSelectedRange == 0..<0)
         #expect(manager.selections.isEmpty)
         
-        // 4. Repeated clear is safe / idempotent
-        manager.clearSelection()
+        // 4. Repeated deselectAll is safe / idempotent
+        manager.deselectAll()
         #expect(!manager.hasSelection)
+        
+        // 5. select(id:) labeled overload
+        let selectedByID = manager.select(id: elem1.id)
+        #expect(selectedByID)
+        #expect(manager.hasSelection)
+        #expect(manager.selectedText == "Hello")
     }
     
     @Test("Out of bounds selection clamping")
@@ -80,9 +89,9 @@ struct SelectionManagerTests {
         let elem = makeRegistration(text: "Swift")
         manager.updateRegisteredElements([elem]) // totalLength = 5
         
-        manager.setGlobalSelection(-10..<100)
+        manager.select(-10..<100)
         #expect(manager.globalSelectedRange == 0..<5)
-        #expect(manager.getSelectedText() == "Swift")
+        #expect(manager.selectedText == "Swift")
     }
     
     @Test("Selection change callback fires on state transitions")
@@ -97,14 +106,14 @@ struct SelectionManagerTests {
             callbackCount += 1
         }
         
-        manager.setGlobalSelection(0..<8)
+        manager.select(0..<8)
         #expect(callbackCount == 1)
         
         // Setting same range should NOT re-trigger callback
-        manager.setGlobalSelection(0..<8)
+        manager.select(0..<8)
         #expect(callbackCount == 1)
         
-        manager.clearSelection()
+        manager.deselectAll()
         #expect(callbackCount == 2)
     }
     
@@ -121,11 +130,11 @@ struct SelectionManagerTests {
         managerB.updateRegisteredElements([elemB])
         
         // Select in Manager A
-        managerA.setGlobalSelection(0..<9)
+        managerA.select(0..<9)
         #expect(managerA.hasSelection)
         
         // Select in Manager B -> should clear Manager A's selection automatically!
-        managerB.setGlobalSelection(0..<9)
+        managerB.select(0..<9)
         #expect(managerB.hasSelection)
         #expect(!managerA.hasSelection)
         #expect(managerA.globalSelectedRange.isEmpty)
@@ -138,14 +147,14 @@ struct SelectionManagerTests {
         let elemLong = makeRegistration(text: "Very long initial text string")
         manager.updateRegisteredElements([elemLong])
         manager.selectAll()
-        #expect(manager.getSelectedText() == "Very long initial text string")
+        #expect(manager.selectedText == "Very long initial text string")
         
         // Now update with a shorter element while selection was active
         let elemShort = makeRegistration(text: "Short")
         manager.updateRegisteredElements([elemShort])
         
         #expect(manager.globalSelectedRange == 0..<5)
-        #expect(manager.getSelectedText() == "Short")
+        #expect(manager.selectedText == "Short")
     }
     
     @Test("External SelectionManager exposes totalLength and fullText")
@@ -174,9 +183,9 @@ struct SelectionManagerTests {
         
         externalManager.selectAll()
         #expect(externalManager.hasSelection)
-        #expect(externalManager.getSelectedText() == "Injectable Content")
+        #expect(externalManager.selectedText == "Injectable Content")
         
-        externalManager.clearSelection()
+        externalManager.deselectAll()
         #expect(!externalManager.hasSelection)
     }
     
@@ -190,8 +199,8 @@ struct SelectionManagerTests {
         let elem = makeRegistration(text: "Modifier Content")
         externalManager.updateRegisteredElements([elem])
         
-        externalManager.setGlobalSelection(0..<8)
-        #expect(externalManager.getSelectedText() == "Modifier")
+        externalManager.select(0..<8)
+        #expect(externalManager.selectedText == "Modifier")
     }
     
     @Test("SelectionHitTestPolicy configurations on SelectionContainer")
@@ -244,7 +253,7 @@ struct SelectionManagerTests {
         
         // Select full first element ("Header Title" -> length 12) + delimiter (1) + partial second ("Middle" -> 6 chars)
         // Global range: 0..<19
-        manager.setGlobalSelection(0..<19)
+        manager.select(0..<19)
         
         #expect(manager.isSelected("header"))
         #expect(manager.isSelected(101))
@@ -273,6 +282,43 @@ struct SelectionManagerTests {
         #expect(allIDs == [AnyHashable("header"), AnyHashable(101)])
     }
     
+    @Test("Programmatically selecting element by ID and local range in ID")
+    @MainActor
+    func testSelectByElementID() {
+        let manager = SelectionManager()
+        let elem1 = makeRegistration(id: "title", text: "Introduction")
+        let elem2 = makeRegistration(id: "body", text: "SwiftUI native selection")
+        let elem3 = makeRegistration(id: 42, text: "Chapter 42")
+        
+        manager.updateRegisteredElements([elem1, elem2, elem3])
+        
+        // 1. Select element "body" by ID
+        let didSelectBody = manager.select(id: "body")
+        #expect(didSelectBody)
+        #expect(manager.isSelected("body"))
+        #expect(!manager.isSelected("title"))
+        #expect(!manager.isSelected(42))
+        #expect(manager.selectedText == "SwiftUI native selection")
+        #expect(manager.selectedText(for: "body") == "SwiftUI native selection")
+        
+        // 2. Select by Int ID 42
+        let didSelectInt = manager.select(id: 42)
+        #expect(didSelectInt)
+        #expect(manager.isSelected(42))
+        #expect(manager.selectedText == "Chapter 42")
+        
+        // 3. Select subrange inside element "body": select "SwiftUI" (0..<7)
+        let didSelectSubrange = manager.select(0..<7, in: "body")
+        #expect(didSelectSubrange)
+        #expect(manager.selectedText == "SwiftUI")
+        #expect(manager.selectedText(for: "body") == "SwiftUI")
+        
+        // 4. Non-existent ID returns false without modifying active selection
+        let didSelectNonExistent = manager.select(id: "missing-id")
+        #expect(!didSelectNonExistent)
+        #expect(manager.selectedText == "SwiftUI")
+    }
+    
     @Test("Public onSelectionChanged callback is not overwritten by platform overlay mounting")
     @MainActor
     func testOverlayDoesNotOverwritePublicCallback() {
@@ -294,34 +340,39 @@ struct SelectionManagerTests {
         #endif
         
         // Changing selection should fire user's callback
-        manager.setGlobalSelection(0..<7)
+        manager.select(0..<7)
         #expect(userCallbackFired == 1)
         
         // Clearing selection should fire user's callback again
-        manager.clearSelection()
+        manager.deselectAll()
         #expect(userCallbackFired == 2)
     }
     
-    @Test("Setting public onSelectionChanged after overlay mount preserves internal handler")
+    @Test("Setting public onSelectionChanged after observer registration preserves observer notifications")
     @MainActor
     func testSettingPublicCallbackPreservesInternalHandler() {
+        final class ObserverStub: SelectionObserver {
+            var count = 0
+            func selectionDidChange(in manager: SelectionManager) {
+                count += 1
+            }
+        }
+        
         let manager = SelectionManager()
         let elem = makeRegistration(text: "Handler Preservation Test")
         manager.updateRegisteredElements([elem])
         
-        var internalHandlerFired = 0
-        manager.onInternalSelectionChanged = {
-            internalHandlerFired += 1
-        }
+        let observer = ObserverStub()
+        manager.addObserver(observer)
         
         var userCallbackFired = 0
         manager.onSelectionChanged = {
             userCallbackFired += 1
         }
         
-        manager.setGlobalSelection(0..<5)
+        manager.select(0..<5)
         #expect(userCallbackFired == 1)
-        #expect(internalHandlerFired == 1)
+        #expect(observer.count == 1)
         
         // Reassign public callback to a new closure
         var secondUserCallbackFired = 0
@@ -329,10 +380,10 @@ struct SelectionManagerTests {
             secondUserCallbackFired += 1
         }
         
-        manager.clearSelection()
+        manager.deselectAll()
         #expect(userCallbackFired == 1) // first closure was replaced
         #expect(secondUserCallbackFired == 1) // second closure fired
-        #expect(internalHandlerFired == 2) // internal handler still fired
+        #expect(observer.count == 2) // observer still fired
     }
     
     @Test("Observable totalLength and fullText update reactively and delimiter-only selection reports hasSelection true")
@@ -350,8 +401,8 @@ struct SelectionManagerTests {
         #expect(manager.fullText == "Hello\nWorld")
         
         // Select delimiter-only range: offset 5..<6 is "\n"
-        manager.setGlobalSelection(5..<6)
-        #expect(manager.getSelectedText() == "\n")
+        manager.select(5..<6)
+        #expect(manager.selectedText == "\n")
         #expect(manager.hasSelection)
         #expect(manager.isSelecting)
     }
@@ -365,7 +416,7 @@ struct SelectionManagerTests {
         let elements = [elem1, elem2]
         
         manager.updateRegisteredElements(elements)
-        manager.setGlobalSelection(0..<5)
+        manager.select(0..<5)
         
         var callbackCount = 0
         manager.onSelectionChanged = {

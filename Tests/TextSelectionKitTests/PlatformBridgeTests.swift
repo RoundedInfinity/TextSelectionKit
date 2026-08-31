@@ -82,10 +82,10 @@ struct PlatformBridgeTests {
         )
         manager.updateRegisteredElements([elem])
         
-        manager.setGlobalSelection(0..<5)
+        manager.select(0..<5)
         #expect(displayCallbackCount == 1)
         
-        manager.clearSelection()
+        manager.deselectAll()
         #expect(displayCallbackCount == 2)
     }
     #endif

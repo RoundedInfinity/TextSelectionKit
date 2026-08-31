@@ -4,14 +4,14 @@ import SwiftUI
 
 // MARK: - macOS Selection Highlight Background View
 
-final class MacOSSelectionHighlightView: NSView {
+final class MacOSSelectionHighlightView: NSView, SelectionObserver {
     weak var manager: SelectionManager? {
         didSet {
-            setupManagerCallback()
+            guard oldValue !== manager else { return }
+            oldValue?.removeObserver(self)
+            manager?.addObserver(self)
         }
     }
-    
-    private var listenerToken: UUID?
     
     override var isFlipped: Bool { true }
     
@@ -32,14 +32,9 @@ final class MacOSSelectionHighlightView: NSView {
     
     internal var onNeedsDisplay: (() -> Void)?
     
-    private func setupManagerCallback() {
-        if let token = listenerToken, let oldManager = manager {
-            oldManager.removeInternalSelectionListener(token: token)
-        }
-        listenerToken = manager?.addInternalSelectionListener { [weak self] in
-            self?.needsDisplay = true
-            self?.onNeedsDisplay?()
-        }
+    func selectionDidChange(in manager: SelectionManager) {
+        needsDisplay = true
+        onNeedsDisplay?()
     }
     
     override func viewDidMoveToWindow() {
@@ -84,6 +79,11 @@ final class MacOSSelectionHighlightView: NSView {
     }
     
     deinit {
+        if let manager = manager {
+            MainActor.assumeIsolated {
+                manager.removeObserver(self)
+            }
+        }
         NotificationCenter.default.removeObserver(self)
     }
 }
@@ -106,10 +106,12 @@ struct MacOSSelectionHighlightOverlay: NSViewRepresentable {
 
 // MARK: - macOS Selection Tracking View
 
-final class MacOSSelectionTrackingView: NSView {
+final class MacOSSelectionTrackingView: NSView, SelectionObserver {
     weak var manager: SelectionManager? {
         didSet {
-            setupManagerCallback()
+            guard oldValue !== manager else { return }
+            oldValue?.removeObserver(self)
+            manager?.addObserver(self)
         }
     }
     
@@ -118,17 +120,19 @@ final class MacOSSelectionTrackingView: NSView {
     
     private var dragAnchorOffset: Int?
     private var activeOffset: Int?
-    private var listenerToken: UUID?
     
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     
-    private func setupManagerCallback() {
-        if let token = listenerToken, let oldManager = manager {
-            oldManager.removeInternalSelectionListener(token: token)
-        }
-        listenerToken = manager?.addInternalSelectionListener { [weak self] in
-            self?.needsDisplay = true
+    func selectionDidChange(in manager: SelectionManager) {
+        needsDisplay = true
+    }
+    
+    deinit {
+        if let manager = manager {
+            MainActor.assumeIsolated {
+                manager.removeObserver(self)
+            }
         }
     }
     
@@ -141,7 +145,6 @@ final class MacOSSelectionTrackingView: NSView {
     }
     
     override func resignFirstResponder() -> Bool {
-        manager?.clearSelection()
         dragAnchorOffset = nil
         activeOffset = nil
         needsDisplay = true
@@ -209,18 +212,18 @@ final class MacOSSelectionTrackingView: NSView {
                 if let wordRange = manager.document.wordRange(atGlobalOffset: clickedOffset) {
                     dragAnchorOffset = wordRange.lowerBound
                     activeOffset = wordRange.upperBound
-                    manager.setGlobalSelection(wordRange)
+                    manager.select(wordRange)
                 }
             case 3...:
                 if let paraRange = manager.document.paragraphRange(atGlobalOffset: clickedOffset) {
                     dragAnchorOffset = paraRange.lowerBound
                     activeOffset = paraRange.upperBound
-                    manager.setGlobalSelection(paraRange)
+                    manager.select(paraRange)
                 }
             default:
                 dragAnchorOffset = clickedOffset
                 activeOffset = clickedOffset
-                manager.clearSelection()
+                manager.deselectAll()
             }
         }
     }
@@ -251,7 +254,7 @@ final class MacOSSelectionTrackingView: NSView {
         
         if !manager.hasSelection || !manager.globalSelectedRange.contains(clickedOffset) {
             if let wordRange = manager.document.wordRange(atGlobalOffset: clickedOffset) {
-                manager.setGlobalSelection(wordRange)
+                manager.select(wordRange)
                 dragAnchorOffset = wordRange.lowerBound
                 activeOffset = wordRange.upperBound
             }
@@ -264,7 +267,7 @@ final class MacOSSelectionTrackingView: NSView {
         guard let manager = manager else { return }
         let start = min(anchor, current)
         let end = max(anchor, current)
-        manager.setGlobalSelection(start..<end)
+        manager.select(start..<end)
     }
     
     // MARK: - Context Menu
@@ -329,11 +332,11 @@ final class MacOSSelectionTrackingView: NSView {
         var result: [NSMenuItem] = []
         for item in parsed {
             switch item {
-            case .action(let title, let systemImage, _, let isEnabled, let displayedShortcut, let action):
-                let keyEq = displayedShortcut != nil ? String(displayedShortcut!.key.character).lowercased() : ""
+            case .action(let title, let systemImage, _, let isEnabled, let shortcut, let action):
+                let keyEq = shortcut != nil ? String(shortcut!.key.character).lowercased() : ""
                 let menuItem = NSMenuItem(title: title, action: #selector(customActionInvoked(_:)), keyEquivalent: keyEq)
-                if let displayedShortcut = displayedShortcut {
-                    menuItem.keyEquivalentModifierMask = mapModifiersToNSEventFlags(displayedShortcut.modifiers)
+                if let shortcut = shortcut {
+                    menuItem.keyEquivalentModifierMask = mapModifiersToNSEventFlags(shortcut.modifiers)
                 }
                 menuItem.target = self
                 menuItem.representedObject = CustomActionBox(action: action)
@@ -362,7 +365,7 @@ final class MacOSSelectionTrackingView: NSView {
     public override func menu(for event: NSEvent) -> NSMenu? {
         guard let manager = manager else { return nil }
         
-        let selectedText = manager.getSelectedText()
+        let selectedText = manager.selectedText
         let hasSelection = manager.hasSelection && !selectedText.isEmpty
         let defaultItems = buildDefaultMenuItems(manager: manager, selectedText: selectedText, hasSelection: hasSelection)
         
@@ -375,7 +378,7 @@ final class MacOSSelectionTrackingView: NSView {
         
         let context = SelectionMenuContext(
             selectedText: selectedText,
-            selectedAttributedString: manager.getSelectedAttributedString(),
+            selectedAttributedString: manager.selectedAttributedString,
             globalSelectedRange: manager.globalSelectedRange,
             selectedIDs: manager.selectedIDs
         )
@@ -408,7 +411,7 @@ final class MacOSSelectionTrackingView: NSView {
     }
     
     @objc private func deselectAction(_ sender: Any) {
-        manager?.clearSelection()
+        manager?.deselectAll()
         dragAnchorOffset = nil
         activeOffset = nil
     }
@@ -417,7 +420,7 @@ final class MacOSSelectionTrackingView: NSView {
         guard let manager = manager, manager.hasSelection else { return }
         let selectedRange = manager.globalSelectedRange
         let rect = manager.document.characterRect(atGlobalOffset: selectedRange.lowerBound)
-        let attrString = NSAttributedString(string: manager.getSelectedText())
+        let attrString = NSAttributedString(string: manager.selectedText)
         
         showDefinition(for: attrString, at: rect.origin)
     }
@@ -425,7 +428,7 @@ final class MacOSSelectionTrackingView: NSView {
     @objc private func shareServiceAction(_ sender: NSMenuItem) {
         guard let service = sender.representedObject as? NSSharingService,
               let manager = manager else { return }
-        service.perform(withItems: [manager.getSelectedText()])
+        service.perform(withItems: [manager.selectedText])
     }
     
     // MARK: - Quick Look & Force Touch (Dictionary Look Up)
@@ -482,7 +485,7 @@ final class MacOSSelectionTrackingView: NSView {
         
         switch event.keyCode {
         case 53: // Escape
-            manager.clearSelection()
+            manager.deselectAll()
             dragAnchorOffset = nil
             activeOffset = nil
             return
@@ -531,7 +534,7 @@ final class MacOSSelectionTrackingView: NSView {
             updateSelection(from: dragAnchorOffset ?? currentPos, to: nextPos)
         } else {
             dragAnchorOffset = nextPos
-            manager.clearSelection()
+            manager.deselectAll()
         }
     }
     

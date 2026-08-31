@@ -15,10 +15,6 @@ let package = Package(
             name: "TextSelectionKit",
             targets: ["TextSelectionKit"]
         ),
-        .library(
-            name: "TextSelectionKitExample",
-            targets: ["TextSelectionKitExample"]
-        ),
     ],
     targets: [
         .target(

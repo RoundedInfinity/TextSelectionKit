@@ -35,25 +35,32 @@ final class CustomTextSelectionRect: UITextSelectionRect {
 
 // MARK: - Native Selection Tracking View (UITextInput + UITextInteraction)
 
-final class NativeSelectionTrackingUIView: UIView, UITextInput {
+final class NativeSelectionTrackingUIView: UIView, UITextInput, SelectionObserver {
     weak var manager: SelectionManager? {
         didSet {
-            setupManagerCallback()
+            guard oldValue !== manager else { return }
+            oldValue?.removeObserver(self)
+            manager?.addObserver(self)
         }
     }
     
     var hitTestPolicy: SelectionHitTestPolicy = .textOnly
     
-    private func setupManagerCallback() {
-        manager?.onInternalSelectionChanged = { [weak self] in
-            guard let self = self else { return }
-            self.setNeedsDisplay()
-            if self.manager?.hasSelection == true {
-                if !self.isFirstResponder {
-                    _ = self.becomeFirstResponder()
-                }
+    func selectionDidChange(in manager: SelectionManager) {
+        setNeedsDisplay()
+        if manager.hasSelection {
+            if !isFirstResponder {
+                _ = becomeFirstResponder()
             }
-            self.inputDelegate?.selectionDidChange(self)
+        }
+        inputDelegate?.selectionDidChange(self)
+    }
+    
+    deinit {
+        if let manager = manager {
+            MainActor.assumeIsolated {
+                manager.removeObserver(self)
+            }
         }
     }
     
@@ -84,9 +91,9 @@ final class NativeSelectionTrackingUIView: UIView, UITextInput {
                 if !isFirstResponder {
                     _ = becomeFirstResponder()
                 }
-                manager.setGlobalSelection(newRange)
+                manager.select(newRange)
             } else {
-                manager.clearSelection()
+                manager.deselectAll()
             }
         }
     }
@@ -441,10 +448,10 @@ final class NativeSelectionTrackingUIView: UIView, UITextInput {
         guard let manager = manager, manager.hasSelection else { return }
         guard let provider = contextMenuProvider else { return }
         
-        let selectedText = manager.getSelectedText()
+        let selectedText = manager.selectedText
         let context = SelectionMenuContext(
             selectedText: selectedText,
-            selectedAttributedString: manager.getSelectedAttributedString(),
+            selectedAttributedString: manager.selectedAttributedString,
             globalSelectedRange: manager.globalSelectedRange,
             selectedIDs: manager.selectedIDs
         )
@@ -479,10 +486,10 @@ extension NativeSelectionTrackingUIView: UIEditMenuInteractionDelegate {
     ) -> UIMenu? {
         guard let manager = manager else { return nil }
         
-        let selectedText = manager.getSelectedText()
+        let selectedText = manager.selectedText
         let context = SelectionMenuContext(
             selectedText: selectedText,
-            selectedAttributedString: manager.getSelectedAttributedString(),
+            selectedAttributedString: manager.selectedAttributedString,
             globalSelectedRange: manager.globalSelectedRange,
             selectedIDs: manager.selectedIDs
         )

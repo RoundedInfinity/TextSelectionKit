@@ -9,26 +9,49 @@ import UIKit
 
 // MARK: - Global Selection Focus Coordinator
 
+/// Coordinates active selection focus across multiple ``SelectionManager`` instances.
+///
+/// Ensures mutual exclusivity so that only one ``SelectionContainer`` maintains an active text selection
+/// at any given time, matching platform-native behavior on macOS and iOS.
 @MainActor
 public final class SelectionFocusCoordinator {
+    /// The shared focus coordinator instance.
     public static let shared = SelectionFocusCoordinator()
     
+    /// The currently active selection manager, or `nil` if no selection is active.
     public private(set) weak var activeManager: SelectionManager?
     
     private init() {}
     
+    /// Registers the given manager as the active selection controller, clearing any previously focused manager.
+    ///
+    /// - Parameter manager: The ``SelectionManager`` that gained focus.
     public func registerActive(_ manager: SelectionManager) {
         if let current = activeManager, current !== manager {
-            current.clearSelection()
+            current.deselectAll()
         }
         activeManager = manager
     }
     
+    /// Clears the active selection manager reference if it matches the specified manager.
+    ///
+    /// - Parameter manager: The ``SelectionManager`` to unregister.
     public func clearIfActive(_ manager: SelectionManager) {
         if activeManager === manager {
             activeManager = nil
         }
     }
+}
+
+// MARK: - Internal Selection Observer Protocol
+
+@MainActor
+protocol SelectionObserver: AnyObject {
+    func selectionDidChange(in manager: SelectionManager)
+}
+
+private struct WeakSelectionObserver {
+    weak var value: (any SelectionObserver)?
 }
 
 // MARK: - High-Performance Selection Manager (@Observable)
@@ -62,41 +85,32 @@ public final class SelectionManager: Identifiable {
     public var onSelectionChanged: (() -> Void)?
     
     @ObservationIgnored
-    private var internalSelectionListeners: [UUID: () -> Void] = [:]
+    private var observers: [WeakSelectionObserver] = []
     
-    /// Registers an internal listener invoked when selection changes, returning a token to unregister.
-    @discardableResult
-    internal func addInternalSelectionListener(_ listener: @escaping () -> Void) -> UUID {
-        let token = UUID()
-        internalSelectionListeners[token] = listener
-        return token
+    /// Registers a weak observer invoked when selection changes.
+    internal func addObserver(_ observer: any SelectionObserver) {
+        observers.removeAll { $0.value == nil || $0.value === observer }
+        observers.append(WeakSelectionObserver(value: observer))
     }
     
-    /// Unregisters an internal listener by token.
-    internal func removeInternalSelectionListener(token: UUID) {
-        internalSelectionListeners.removeValue(forKey: token)
+    /// Returns the number of registered active selection observers, pruning deallocated weak references.
+    internal var observerCount: Int {
+        observers.removeAll { $0.value == nil }
+        return observers.count
     }
     
-    /// An internal callback invoked when selection changes, used by platform overlays without interfering with `onSelectionChanged`.
-    @ObservationIgnored
-    internal var onInternalSelectionChanged: (() -> Void)? {
-        get { internalSelectionListeners.values.first }
-        set {
-            let fixedKey = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
-            if let newValue = newValue {
-                internalSelectionListeners[fixedKey] = newValue
-            } else {
-                internalSelectionListeners.removeValue(forKey: fixedKey)
-            }
-        }
+    /// Unregisters a selection observer.
+    internal func removeObserver(_ observer: any SelectionObserver) {
+        observers.removeAll { $0.value == nil || $0.value === observer }
     }
     
     /// Creates a new selection manager.
     public init() {}
     
     private func notifySelectionChanged() {
-        for listener in internalSelectionListeners.values {
-            listener()
+        observers.removeAll { $0.value == nil }
+        for wrapper in observers {
+            wrapper.value?.selectionDidChange(in: self)
         }
         onSelectionChanged?()
     }
@@ -107,7 +121,36 @@ public final class SelectionManager: Identifiable {
     /// The concatenated full text across all registered elements in the virtual document.
     public private(set) var fullText: String = ""
     
+    // MARK: - Direct Element Registration (iOS 18+ / macOS 15+)
+    
+    private var registeredElementsMap: [AnyHashable: TextElementRegistration] = [:]
+    
+    /// Registers or updates a single text element in the virtual document.
+    func registerElement(_ element: TextElementRegistration) {
+        if let existing = registeredElementsMap[element.id], existing == element {
+            return
+        }
+        registeredElementsMap[element.id] = element
+        updateRegisteredElementsInternal(Array(registeredElementsMap.values))
+    }
+    
+    /// Unregisters a text element by its identifier when removed or scrolled out of view.
+    func unregisterElement(id: AnyHashable) {
+        guard registeredElementsMap.removeValue(forKey: id) != nil else { return }
+        updateRegisteredElementsInternal(Array(registeredElementsMap.values))
+    }
+    
+    /// Updates all registered elements in batch (used by PreferenceKey fallback or bulk injection).
     func updateRegisteredElements(_ elements: [TextElementRegistration]) {
+        var newMap: [AnyHashable: TextElementRegistration] = [:]
+        for elem in elements {
+            newMap[elem.id] = elem
+        }
+        self.registeredElementsMap = newMap
+        updateRegisteredElementsInternal(elements)
+    }
+    
+    private func updateRegisteredElementsInternal(_ elements: [TextElementRegistration]) {
         self.document.update(elements: elements)
         
         let newTotalLength = document.totalLength
@@ -145,7 +188,7 @@ public final class SelectionManager: Identifiable {
     /// Offsets are specified in UTF-16 code units and are automatically clamped to valid document bounds `0..<totalLength`.
     ///
     /// - Parameter range: The continuous range in UTF-16 code-unit offsets to select within the virtual document.
-    public func setGlobalSelection(_ range: Range<Int>) {
+    public func select(_ range: Range<Int>) {
         let lower = max(0, min(range.lowerBound, document.totalLength))
         let upper = max(lower, min(range.upperBound, document.totalLength))
         let clampedRange = lower..<upper
@@ -165,8 +208,36 @@ public final class SelectionManager: Identifiable {
         self.notifySelectionChanged()
     }
     
-    /// Clears the active selection.
-    public func clearSelection() {
+    /// Programmatically selects the full text of the element with the specified identifier.
+    ///
+    /// - Parameter id: The identifier of the element to select.
+    /// - Returns: `true` if the element was found and selected, otherwise `false`.
+    @discardableResult
+    public func select<ID: Hashable>(id: ID) -> Bool {
+        guard let slice = document.slices.first(where: { $0.element.id == AnyHashable(id) }) else { return false }
+        select(slice.globalRange)
+        return true
+    }
+    
+    /// Programmatically selects a range within the element with the specified identifier.
+    ///
+    /// - Parameters:
+    ///   - range: The local range in UTF-16 code units within the element to select.
+    ///   - id: The identifier of the element.
+    /// - Returns: `true` if the element was found and selected, otherwise `false`.
+    @discardableResult
+    public func select<ID: Hashable>(_ range: Range<Int>, in id: ID) -> Bool {
+        guard let slice = document.slices.first(where: { $0.element.id == AnyHashable(id) }) else { return false }
+        let elemLen = slice.element.text.utf16.count
+        let localStart = max(0, min(range.lowerBound, elemLen))
+        let localEnd = max(localStart, min(range.upperBound, elemLen))
+        let globalRange = (slice.globalRange.lowerBound + localStart)..<(slice.globalRange.lowerBound + localEnd)
+        select(globalRange)
+        return true
+    }
+    
+    /// Deselects all text across all registered elements in the container.
+    public func deselectAll() {
         guard !globalSelectedRange.isEmpty || !selections.isEmpty || isSelecting else { return }
         self.globalSelectedRange = 0..<0
         self.selections.removeAll()
@@ -176,12 +247,12 @@ public final class SelectionManager: Identifiable {
     
     /// Selects all text across all registered elements in the container.
     public func selectAll() {
-        setGlobalSelection(0..<document.totalLength)
+        select(0..<document.totalLength)
     }
     
     /// Copies the currently selected plain and rich text to the system pasteboard.
     public func copySelection() {
-        let copiedText = getSelectedText()
+        let copiedText = selectedText
         guard !copiedText.isEmpty else { return }
         
         #if os(macOS)
@@ -189,7 +260,7 @@ public final class SelectionManager: Identifiable {
         pasteboard.clearContents()
         pasteboard.setString(copiedText, forType: .string)
         
-        let attrString = getSelectedAttributedString()
+        let attrString = selectedAttributedString
         let nsAttr = PlatformAttributedStringBuilder.build(from: attrString, defaultFont: NSFont.systemFont(ofSize: NSFont.systemFontSize))
         if let rtfData = try? nsAttr.data(from: NSRange(location: 0, length: nsAttr.length), documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
             pasteboard.setData(rtfData, forType: .rtf)
@@ -199,19 +270,19 @@ public final class SelectionManager: Identifiable {
         #endif
     }
     
-    /// Returns the plain text content of the active selection.
-    public func getSelectedText() -> String {
+    /// The plain text content of the active selection in the virtual document.
+    public var selectedText: String {
         document.text(in: globalSelectedRange)
     }
     
-    /// Returns the formatted rich text content of the active selection as an `AttributedString`.
-    public func getSelectedAttributedString() -> AttributedString {
+    /// The formatted rich text content of the active selection as an `AttributedString`.
+    public var selectedAttributedString: AttributedString {
         document.attributedString(in: globalSelectedRange)
     }
     
     /// A Boolean value indicating whether there is an active, non-empty selection.
     public var hasSelection: Bool {
-        !globalSelectedRange.isEmpty && !getSelectedText().isEmpty
+        !globalSelectedRange.isEmpty && !selectedText.isEmpty
     }
     
     // MARK: - Element Identification & Queries
@@ -268,12 +339,9 @@ public final class SelectionManager: Identifiable {
         return nil
     }
     
-    /// Returns the identifiers of all elements that currently contain a non-empty selection, cast to the given type.
+    /// Returns the identifiers of all elements that currently contain a non-empty selection, cast to the given type in visual reading order.
     ///
-    /// The identifiers are returned in visual reading/document layout order.
-    ///
-    /// - Parameter type: The concrete identifier type to extract.
-    /// - Returns: An array of matching identifiers for currently selected elements.
+    /// - Parameter type: The concrete identifier type to extract. Defaults to `ID.self`.
     public func selectedIDs<ID: Hashable>(_ type: ID.Type = ID.self) -> [ID] {
         document.slices.compactMap { slice in
             guard let range = selections[slice.element.id], !range.isEmpty else { return nil }
@@ -281,9 +349,7 @@ public final class SelectionManager: Identifiable {
         }
     }
     
-    /// Returns the identifiers of all elements that currently contain a non-empty selection.
-    ///
-    /// The identifiers are returned in visual reading/document layout order.
+    /// The identifiers of all elements that currently contain a non-empty selection, in visual reading order.
     public var selectedIDs: [AnyHashable] {
         document.slices.compactMap { slice in
             guard let range = selections[slice.element.id], !range.isEmpty else { return nil }

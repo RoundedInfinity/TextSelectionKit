@@ -38,6 +38,8 @@ extension EnvironmentValues {
 extension View {
     /// Sets the explicit selection traversal order for child ``SelectableText`` views within a ``SelectionContainer``.
     ///
+    /// ![Annotated layout diagram showing selection order arrows proceeding down the entire first column before moving to the top of the second column.](multicolumn-order)
+    ///
     /// By default, a ``SelectionContainer`` traverses selectable text in visual row-by-row reading order:
     /// from top to bottom (Y-axis), and left to right (X-axis). While this works well for standard vertical
     /// flows, it can cause unintuitive jumping in multi-column grids or side-by-side card layouts where a user
@@ -73,29 +75,6 @@ extension View {
     /// - Parameter index: An integer specifying the sort priority. Defaults to `0`. Lower values are sequenced first.
     public func selectionOrder(_ index: Int) -> some View {
         environment(\.selectionOrderIndex, index)
-    }
-    
-    /// Disables text selection for child ``SelectableText`` views within this view hierarchy.
-    ///
-    /// When applied, descendant ``SelectableText`` views will not participate in multi-element
-    /// drag selection, will be excluded from the surrounding ``SelectionContainer``'s virtual layout,
-    /// and will render as standard non-selectable text.
-    ///
-    /// ```swift
-    /// VStack {
-    ///     SelectableText("This text is selectable.")
-    ///
-    ///     VStack {
-    ///         SelectableText("Excluded text 1")
-    ///         SelectableText("Excluded text 2")
-    ///     }
-    ///     .disabledSelection()
-    /// }
-    /// ```
-    ///
-    /// - Parameter disabled: A Boolean value indicating whether text selection is disabled. Defaults to `true`.
-    public func disabledSelection(_ disabled: Bool = true) -> some View {
-        environment(\.isSelectableTextDisabled, disabled)
     }
     
     /// Disables text selection for child ``SelectableText`` views within this view hierarchy.
@@ -176,7 +155,6 @@ public struct SelectableText: View {
     @Environment(\.isSelectableTextDisabled) private var isSelectableTextDisabled
     @Environment(\.selectionDelimiter) private var selectionDelimiter
     
-    /// Creates a selectable text view from a localized string resource.
     /// Creates a selectable text view from a localized string resource.
     ///
     /// String literals and string interpolations passed to `SelectableText("...")` use this initializer,
@@ -294,24 +272,30 @@ public struct SelectableText: View {
         self.customId = id
     }
     
-    private var effectiveAttributedText: AttributedString {
+    func applyingTextCase(_ textCase: Text.Case?) -> AttributedString {
         guard let textCase = textCase else { return attributedText }
-        var copy = attributedText
-        switch textCase {
-        case .uppercase:
-            for run in copy.runs {
-                let chars = copy[run.range].characters
-                copy.replaceSubrange(run.range, with: AttributedString(String(chars).uppercased()))
+        var result = AttributedString()
+        for run in attributedText.runs {
+            let runChars = attributedText[run.range].characters
+            let transformedString: String
+            switch textCase {
+            case .uppercase:
+                transformedString = String(runChars).uppercased()
+            case .lowercase:
+                transformedString = String(runChars).lowercased()
+            @unknown default:
+                transformedString = String(runChars)
             }
-        case .lowercase:
-            for run in copy.runs {
-                let chars = copy[run.range].characters
-                copy.replaceSubrange(run.range, with: AttributedString(String(chars).lowercased()))
-            }
-        @unknown default:
-            break
+            
+            var transformedRun = AttributedString(transformedString)
+            transformedRun.setAttributes(run.attributes)
+            result.append(transformedRun)
         }
-        return copy
+        return result
+    }
+    
+    private var effectiveAttributedText: AttributedString {
+        applyingTextCase(textCase)
     }
     
     public var body: some View {
@@ -321,33 +305,15 @@ public struct SelectableText: View {
         if isSelectableTextDisabled {
             // Disabled selection: Render as plain static SwiftUI Text without registering preference or fallback
             Text(effectiveAttributed)
-        } else if selectionManager != nil {
+        } else if let manager = selectionManager {
             let platformFont = PlatformFontResolver.resolve(from: environmentFont, dynamicTypeSize: dynamicTypeSize)
             
-            renderedText(for: effectiveAttributed, rawText: effectiveRaw)
-                .background(
-                    GeometryReader { geometry in
-                        Color.clear.preference(
-                            key: ElementRegistrationKey.self,
-                            value: [
-                                TextElementRegistration(
-                                    id: effectiveId,
-                                    text: effectiveRaw,
-                                    attributedString: effectiveAttributed,
-                                    frame: geometry.frame(in: .named("SelectionContainerCoordinateSpace")),
-                                    font: platformFont,
-                                    orderIndex: orderIndex,
-                                    delimiter: selectionDelimiter,
-                                    alignment: multilineTextAlignment,
-                                    lineSpacing: lineSpacing,
-                                    lineLimit: lineLimit,
-                                    truncationMode: truncationMode,
-                                    layoutDirection: layoutDirection
-                                )
-                            ]
-                        )
-                    }
-                )
+            renderedSelectableText(
+                manager: manager,
+                effectiveAttributed: effectiveAttributed,
+                effectiveRaw: effectiveRaw,
+                platformFont: platformFont
+            )
         } else {
             // Standalone Fallback: Standard SwiftUI text with selection enabled
             Text(effectiveAttributed)
@@ -362,8 +328,52 @@ public struct SelectableText: View {
     }
     
     @ViewBuilder
-    private func renderedText(for effectiveAttr: AttributedString, rawText: String) -> some View {
-        Text(effectiveAttr)
+    private func renderedSelectableText(
+        manager: SelectionManager,
+        effectiveAttributed: AttributedString,
+        effectiveRaw: String,
+        platformFont: PlatformFont
+    ) -> some View {
+        let makeRegistration: (CGRect) -> TextElementRegistration = { frame in
+            TextElementRegistration(
+                id: effectiveId,
+                text: effectiveRaw,
+                attributedString: effectiveAttributed,
+                frame: frame,
+                font: platformFont,
+                orderIndex: orderIndex,
+                delimiter: selectionDelimiter,
+                alignment: multilineTextAlignment,
+                lineSpacing: lineSpacing,
+                lineLimit: lineLimit,
+                truncationMode: truncationMode,
+                layoutDirection: layoutDirection
+            )
+        }
+        
+        if #available(iOS 18.0, macOS 15.0, visionOS 2.0, tvOS 18.0, watchOS 11.0, *) {
+            Text(effectiveAttributed)
+                .onGeometryChange(for: CGRect.self) { proxy in
+                    proxy.frame(in: .named("SelectionContainerCoordinateSpace"))
+                } action: { newFrame in
+                    manager.registerElement(makeRegistration(newFrame))
+                }
+                .onDisappear {
+                    manager.unregisterElement(id: effectiveId)
+                }
+        } else {
+            Text(effectiveAttributed)
+                .background(
+                    GeometryReader { geometry in
+                        Color.clear.preference(
+                            key: ElementRegistrationKey.self,
+                            value: [
+                                makeRegistration(geometry.frame(in: .named("SelectionContainerCoordinateSpace")))
+                            ]
+                        )
+                    }
+                )
+        }
     }
 }
 
@@ -473,19 +483,19 @@ extension SelectableText {
     
     /// Sets the foreground color of the text.
     ///
-    /// - Parameter color: The color to apply to the text.
-    public func foregroundStyle(_ color: Color) -> SelectableText {
+    /// - Parameter color: The color to apply to the text, or `nil` to clear explicit foreground coloring.
+    public func foregroundColor(_ color: Color?) -> SelectableText {
         var copy = self.attributedText
         copy.foregroundColor = color
         return SelectableText(copy, id: self.customId)
     }
     
-    /// Sets the foreground color of the text.
+    /// Sets the font for the text.
     ///
-    /// - Parameter color: The color to apply to the text, or `nil` to clear explicit foreground coloring.
-    public func foregroundColor(_ color: Color?) -> SelectableText {
+    /// - Parameter font: The font to apply to the text, or `nil` to clear explicit font styling.
+    public func font(_ font: Font?) -> SelectableText {
         var copy = self.attributedText
-        copy.foregroundColor = color
+        copy.font = font
         return SelectableText(copy, id: self.customId)
     }
     
