@@ -2,12 +2,12 @@
 
 **Native, continuous multi-element text selection for SwiftUI.**
 
-[![Swift 6.0](https://img.shields.io/badge/Swift-6.0-orange.svg?style=flat)](https://swift.org)
-[![Platforms](https://img.shields.io/badge/Platforms-iOS%2017+%20%7C%20macOS%2014+%20%7C%20visionOS%201+-blue.svg?style=flat)](https://developer.apple.com)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat)](LICENSE)
+<a href="https://github.com/roundedinfinity/TextSelectionKit"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/github/roundedinfinity/TextSelectionKit/stars.svg?variant=secondary" /><img alt="badge" src="https://shieldcn.dev/github/roundedinfinity/TextSelectionKit/stars.svg?variant=secondary&amp;mode=light" /></picture></a>
+<a href="https://swift.org"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Swift-6.0.svg?variant=secondary&amp;logo=ri%3ATbBrandSwift" /><img alt="badge" src="https://shieldcn.dev/badge/Swift-6.0.svg?variant=secondary&amp;mode=light&amp;logo=ri%3ATbBrandSwift" /></picture></a>
+<a href="https://github.com/roundedinfinity/TextSelectionKit"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/github/roundedinfinity/TextSelectionKit/license.svg?variant=secondary" /><img alt="license" src="https://shieldcn.dev/github/roundedinfinity/TextSelectionKit/license.svg?variant=secondary&amp;mode=light" /></picture></a>
 
 <p align="center">
-  <img src="Sources/TextSelectionKit/TextSelectionKit.docc/Resources/demo.gif" alt="TextSelectionKit Demo" width="100%" />
+  <img alt="Screen recording demonstrating smooth drag selection across multiple SwiftUI text elements." src="https://github.com/RoundedInfinity/TextSelectionKit/blob/main/Sources/TextSelectionKit/TextSelectionKit.docc/Resources/demo.gif?raw=true" width="100%" />
 </p>
 
 ---
@@ -42,23 +42,14 @@ struct ArticleView: View {
 }
 ```
 
----
-
 ## Features
 
-- 🎯 **Continuous Multi-Element Selection**: Drag across distinct text views, headings, paragraphs, and dividers.
-- 🍏 **True Platform-Native Behavior**:
-  - **macOS**: AppKit first responder coordination, `NSColor.selectedTextBackgroundColor`, keyboard arrow navigation, Shift-selection, and Quick Look dictionary lookups.
-  - **iOS & visionOS**: UIKit `UITextInput` integration, native selection grab handles, magnifying loupe tracking, and `UIEditMenuInteraction`.
-- ⚡ **Zero-Allocation CoreText Caching**: Backed by `CTFrame` and `CTLine` geometry caches with $O(\log N)$ binary search hit-testing during 60–120 FPS drag gestures.
-- ✍️ **Complete Typography & Rich Text**: Supports Dynamic Type, all system font weights and designs (`.serif`, `.rounded`, `.monospaced`), letter tracking, kerning, underlines, strikethroughs, baseline offsets, and `+` concatenation.
-- 🌍 **Right-to-Left (RTL) & Bi-Directional Scripts**: Accurate glyph run selection and caret mapping for Arabic, Hebrew, and mixed Latin scripts.
-- 🗂️ **Multi-Column & Grid Reading Order**: Override 2D visual layout order with `.selectionOrder(_:)` for columnar flows.
-- 🛡️ **Hit-Test Gesture Protection**: Choose between `.textOnly` (prevents gesture collisions with buttons/toggles) and `.container` (margin drag-selection for document readers).
-- 📋 **Custom Context Menu DSL**: Build rich contextual menus using `SelectionButton`, `SelectionMenu`, and `SelectionDivider` with shortcut displays and placement modes.
-- 🕹️ **Programmatic Selection**: Observe, inspect, and manipulate selection ranges, query selections by element ID, and copy rich text to the clipboard with `SelectionManager`.
-
----
+- **Multi-Element Selection**: Continuous selection spanning distinct SwiftUI views, headings, paragraphs, and dividers.
+- **Native Platform Experience**: Full integration with AppKit (macOS) and UIKit `UITextInput` (iOS/visionOS) with loupe magnifiers, selection handles, and edit menus.
+- **Typography & Rich Text**: Supports system text styles, custom weights, font designs (`.serif`, `.rounded`, `.monospaced`), tracking, kerning, and markdown formatting.
+- **Custom Reading Orders**: Explicit sequencing with `.selectionOrder(_:)` for multi-column grids.
+- **Context Menu**: Declarative `.selectionContextMenu` with placement options and shortcut displays.
+- **Programmatic Control**: Inspect and control active selection ranges via `SelectionManager`.
 
 ## Requirements
 
@@ -66,8 +57,6 @@ struct ArticleView: View {
 - **macOS 14.0+**
 - **visionOS 1.0+**
 - **Swift 6.0+** / **Xcode 16.0+**
-
----
 
 ## Installation
 
@@ -92,22 +81,32 @@ Or in Xcode:
 
 ### 1. Basic Multi-Element Selection
 
-Wrap your layout in a `SelectionContainer` and replace `Text` views with `SelectableText`:
+Wrap your view hierarchy in a `SelectionContainer` and use `SelectableText`. Dragging smoothly spans across headings, dividers, tags, quotes, and body paragraphs:
 
 ```swift
 import SwiftUI
 import TextSelectionKit
 
-struct NoteView: View {
+struct ArticleView: View {
     var body: some View {
         SelectionContainer {
-            VStack(alignment: .leading, spacing: 16) {
-                SelectableText("Meeting Agenda")
-                    .font(.headline)
+            VStack(alignment: .leading, spacing: 14) {
+                SelectableText("Deep Dive into SwiftUI Architecture")
+                    .font(.title.bold())
 
                 Divider()
 
-                SelectableText("1. Review architecture milestones\n2. Discuss release timeline")
+                SelectableText("""
+                Standard SwiftUI isolates each `Text` element. With **TextSelectionKit**,
+                 dragging your cursor or finger highlights text seamlessly across this entire view tree.
+                """)
+                    .font(.body)
+
+                SelectableText("\"A unified selection experience across disjoint views.\"")
+                    .font(.callout.italic())
+                    .padding(.leading, 12)
+
+                SelectableText("Works out-of-the-box with standard SwiftUI fonts, layout stacks, and custom containers.")
                     .font(.body)
             }
             .padding()
@@ -116,48 +115,68 @@ struct NoteView: View {
 }
 ```
 
-### 2. Multi-Column Reading Order
+### 2. Programmatic Selection
 
-In side-by-side or grid layouts, use `.selectionOrder(_:)` to prioritize column-first traversal over default top-to-bottom row scanning:
+Pass a `SelectionManager` into `SelectionContainer` to inspect, select, copy, or clear selection programmatically:
+
+```swift
+struct ProgrammaticSelectionView: View {
+    @State private var manager = SelectionManager()
+
+    var body: some View {
+        VStack(spacing: 16) {
+            HStack(spacing: 12) {
+                Button("Select All") { manager.selectAll() }
+                Button("Copy") { manager.copySelection() }
+                    .disabled(!manager.hasSelection)
+                Button("Clear") { manager.deselectAll() }
+                    .disabled(!manager.hasSelection)
+            }
+
+            SelectionContainer(manager: manager) {
+                VStack(alignment: .leading, spacing: 12) {
+                    SelectableText("First Section Heading")
+                        .font(.headline)
+                    SelectableText("This content is observed and controlled programmatically by the SelectionManager.")
+                }
+                .padding()
+            }
+        }
+    }
+}
+```
+
+### 3. Multi-Column Reading Order
+
+In side-by-side columns or grids, use `.selectionOrder(_:)` to prioritize column-first reading order over default visual row scanning:
+
+<p align="center">
+  <img alt="image" src="https://raw.githubusercontent.com/RoundedInfinity/TextSelectionKit/refs/heads/main/Sources/TextSelectionKit/TextSelectionKit.docc/Resources/multicolumn-order.png?token=GHSAT0AAAAAAED3D53PMIOEV4UZMKRSREL62UVIMEA" />
+</p>
 
 ```swift
 SelectionContainer {
     HStack(alignment: .top, spacing: 20) {
         // Left Column (Selected 1st)
-        VStack(alignment: .leading) {
-            SelectableText("Column 1: Header")
-            SelectableText("Column 1: Body")
+        VStack(alignment: .leading, spacing: 8) {
+            SelectableText("Column 1: Header").font(.headline)
+            SelectableText("Column 1: First paragraph.")
+            SelectableText("Column 1: Second paragraph.")
         }
         .selectionOrder(0)
 
         // Right Column (Selected 2nd)
-        VStack(alignment: .leading) {
-            SelectableText("Column 2: Header")
-            SelectableText("Column 2: Body")
+        VStack(alignment: .leading, spacing: 8) {
+            SelectableText("Column 2: Header").font(.headline)
+            SelectableText("Column 2: First paragraph.")
+            SelectableText("Column 2: Second paragraph.")
         }
         .selectionOrder(1)
     }
 }
 ```
 
-### 3. Custom Delimiters & Disabled Sub-Hierarchies
-
-```swift
-VStack(alignment: .leading, spacing: 12) {
-    // Delimiter for inline tokens (copies as "First Last" instead of newline)
-    HStack {
-        SelectableText("First")
-        SelectableText("Last")
-    }
-    .selectionDelimiter(" ")
-
-    // Exclude metadata/badges from participating in selection
-    VStack {
-        SelectableText("Unselectable Tag / Badge")
-    }
-    .selectableTextDisabled()
-}
-```
+> **Note on Custom Delimiters**: By default, elements are joined by newline characters (`"\n"`). Use `.selectionDelimiter(" ")` on inline views (such as first and last name tokens) to customize how text is concatenated when copied.
 
 ### 4. Custom Context Menus
 
@@ -171,6 +190,8 @@ SelectionContainer {
     SelectionButton(
         "Highlight",
         systemImage: "highlighter",
+        // Note: The shortcut parameter is purely visual; actual keyboard shortcut triggers
+        // must be handled elsewhere in your view hierarchy or macOS commands menu.
         shortcut: SelectionKeyboardShortcut("h", modifiers: [.command, .shift])
     ) {
         print("Highlighted: \(context.selectedText)")
@@ -182,56 +203,18 @@ SelectionContainer {
 
     SelectionDivider()
 
-    SelectionMenu("Share Selection", systemImage: "square.and.arrow.up") {
+    SelectionMenu("Share", systemImage: "square.and.arrow.up") {
         SelectionButton("To Notes", systemImage: "note.text") { }
         SelectionButton("To Messages", systemImage: "message") { }
     }
 }
 ```
 
-### 5. Programmatic Selection & HUD Controls
-
-```swift
-struct ControlledView: View {
-    @State private var manager = SelectionManager()
-
-    var body: some View {
-        VStack {
-            HStack {
-                Button("Select All") { manager.selectAll() }
-                Button("Copy") { manager.copySelection() }
-                    .disabled(!manager.hasSelection)
-                Button("Deselect") { manager.deselectAll() }
-                    .disabled(!manager.hasSelection)
-            }
-
-            SelectionContainer(manager: manager) {
-                VStack(alignment: .leading) {
-                    SelectableText("Section A", id: "section-a")
-                    SelectableText("Section B", id: "section-b")
-                }
-            }
-
-            if manager.hasSelection {
-                Text("Selected \(manager.selectedText.count) characters across elements: \(manager.selectedIDs(String.self).joined(separator: ", "))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-}
-```
-
 ---
 
-## Examples & Showcase App
+## Example App
 
-The repository includes a showcase target (`Examples/TextSelectionKitExample`) featuring:
-1. **Side-by-Side Comparison**: Standard SwiftUI selection vs. TextSelectionKit.
-2. **Feature Showcase**: Live selection HUD, attributed formatting, and disabled sub-hierarchies.
-3. **Typography & Font Modifiers**: Complete weight spectrum, designs, tracking, and concatenation.
-4. **Complex & RTL Layouts**: Multi-column grids and Arabic/Hebrew script rendering.
-5. **Long Document Reader**: Margin hit-testing and performance testing.
+Explore the complete showcase project in [`Examples/TextSelectionKitExample`](Examples/TextSelectionKitExample) for interactive demonstrations of multi-column layouts, typography modifiers, RTL scripts, and document reader implementations.
 
 ---
 
