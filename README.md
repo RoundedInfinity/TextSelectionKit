@@ -151,7 +151,7 @@ struct ProgrammaticSelectionView: View {
 In side-by-side columns or grids, use `.selectionOrder(_:)` to prioritize column-first reading order over default visual row scanning:
 
 <p align="center">
-  <img alt="image" src="https://raw.githubusercontent.com/RoundedInfinity/TextSelectionKit/refs/heads/main/Sources/TextSelectionKit/TextSelectionKit.docc/Resources/multicolumn-order.png?token=GHSAT0AAAAAAED3D53PMIOEV4UZMKRSREL62UVIMEA" />
+  <img alt="image" src="https://github.com/RoundedInfinity/TextSelectionKit/blob/main/Sources/TextSelectionKit/TextSelectionKit.docc/Resources/multicolumn-order.png?raw=true" />
 </p>
 
 ```swift
